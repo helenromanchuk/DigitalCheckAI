@@ -281,6 +281,7 @@ class Database:
         now = datetime.now(timezone.utc).isoformat()
         inserted_receipts = 0
         updated_receipts = 0
+        skipped_receipts = 0
         new_items_for_catalog: dict[str, dict[str, Any]] = {}
 
         with self.connect() as conn:
@@ -293,6 +294,11 @@ class Database:
                     "SELECT 1 FROM receipts WHERE transaction_barcode = ?",
                     (barcode,),
                 ).fetchone()
+
+                if exists and receipt.get("is_partial"):
+                    # Детали не загрузились: оставляем ранее сохранённый чек с позициями как есть
+                    skipped_receipts += 1
+                    continue
 
                 if exists:
                     updated_receipts += 1
@@ -408,6 +414,7 @@ class Database:
         return {
             "inserted_receipts": inserted_receipts,
             "updated_receipts": updated_receipts,
+            "skipped_receipts": skipped_receipts,
             "new_items": list(new_items_for_catalog.values()),
         }
 

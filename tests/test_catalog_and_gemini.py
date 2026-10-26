@@ -83,3 +83,64 @@ def test_first_time_gemini_classification_and_manual_override(tmp_path: Path, mo
     assert len(stats["by_category"]) == 1
     assert stats["by_category"][0]["category"] == "Здоровье, аптека, витамины и гигиена"
     assert stats["by_category"][0]["net_spent"] == 49.98
+
+
+def test_partial_receipt_does_not_wipe_existing_items(tmp_path: Path):
+    db = Database(tmp_path / "test_costco.db")
+    full = parse_any_costco_payload(
+        {
+            "transactionBarcode": "R-PART",
+            "transactionDate": "2026-10-01",
+            "total": 5.0,
+            "itemArray": [{"itemNumber": "42", "itemDescription01": "MILK", "unit": 1, "amount": 5.0}],
+        }
+    )
+    db.upsert_receipts(full)
+
+    # Повторная синхронизация: детали не загрузились, в чеке из списка нет позиций
+    partial = parse_any_costco_payload({"transactionBarcode": "R-PART", "transactionDate": "2026-10-01", "total": 5.0})
+    partial[0]["is_partial"] = True
+    result = db.upsert_receipts(partial)
+
+    assert result["skipped_receipts"] == 1
+    with db.connect() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM receipt_items WHERE transaction_barcode = 'R-PART'").fetchone()[0]
+    assert count == 1
+
+
+def test_gemini_unknown_item_numbers_are_ignored(tmp_path: Path, monkeypatch):
+    import json
+    import types as pytypes
+    from google import genai
+
+    db = Database(tmp_path / "test_costco.db")
+    db.upsert_receipts(
+        parse_any_costco_payload(
+            {
+                "transactionBarcode": "R-G",
+                "transactionDate": "2026-10-01",
+                "itemArray": [{"itemNumber": "123456", "itemDescription01": "KS EVOO", "unit": 1, "amount": 9.0}],
+            }
+        )
+    )
+
+    answer = {
+        "items": [
+            {"item_number": "0123456 ", "clean_name": "Olive Oil", "category": "Бакалея, масла, специи и консервы"},
+            {"item_number": "999999", "clean_name": "Invented", "category": "Прочее"},
+        ]
+    }
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.models = pytypes.SimpleNamespace(
+                generate_content=lambda **kw: pytypes.SimpleNamespace(text=json.dumps(answer, ensure_ascii=False))
+            )
+
+    monkeypatch.setattr(genai, "Client", FakeClient)
+    results = GeminiItemClassifier(db)._call_gemini_batch(
+        [{"item_number": "123456", "raw_description": "KS EVOO"}], db.get_all_categories(), "key"
+    )
+
+    assert [r["item_number"] for r in results] == ["123456"]
+    assert results[0]["clean_name"] == "Olive Oil"

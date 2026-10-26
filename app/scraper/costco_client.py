@@ -416,6 +416,7 @@ class CostcoClient:
             seen.add(barcode)
 
             raw = list_receipt
+            is_partial = True
             try:
                 data = self._graphql(
                     page,
@@ -425,6 +426,7 @@ class CostcoClient:
                 details = (data.get("receiptsWithCounts") or {}).get("receipts") or []
                 if details:
                     raw = details[0]
+                    is_partial = False
                 else:
                     logger.warning("Пустой ответ по чеку %s, используем данные из списка", barcode)
             except CostcoApiError as exc:
@@ -432,6 +434,8 @@ class CostcoClient:
 
             parsed = parse_warehouse_or_gas_receipt(raw)
             if parsed:
+                # Без деталей в чеке нет позиций — upsert не должен затирать уже сохранённые
+                parsed["is_partial"] = is_partial
                 results.append(parsed)
         return results
 
@@ -472,6 +476,7 @@ class CostcoClient:
             seen.add(order_number)
 
             raw = order
+            is_partial = True
             try:
                 data = self._graphql(page, ONLINE_ORDER_DETAIL_QUERY, {"orderNumbers": [order_number]})
                 details = data.get("getOrderDetails")
@@ -479,10 +484,12 @@ class CostcoClient:
                     details = details[0] if details else None
                 if details:
                     raw = _flatten_order_details(details)
+                    is_partial = False
             except CostcoApiError as exc:
                 logger.warning("Не удалось получить заказ %s: %s", order_number, exc)
 
             parsed = parse_online_order(raw)
             if parsed:
+                parsed["is_partial"] = is_partial
                 results.append(parsed)
         return results

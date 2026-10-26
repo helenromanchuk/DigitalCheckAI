@@ -148,3 +148,57 @@ def test_hash_and_slash_coupons_and_weight_items():
     assert items["21647"]["quantity"] == 5.421
     assert items["21647"]["net_amount"] == 18.92
     assert round(sum(i["net_amount"] for i in r["items"]), 2) == r["total"]
+
+
+def test_return_line_with_slash_is_not_a_coupon():
+    # Возврат с "/" в описании не должен вычитаться из последней позиции чека
+    receipt = {
+        "transactionBarcode": "R-RETURN",
+        "transactionDate": "2026-10-10",
+        "itemArray": [
+            {"itemNumber": "111", "itemDescription01": "KS TOWEL 12/120CT", "unit": -1, "amount": -19.99},
+            {"itemNumber": "222", "itemDescription01": "BANANAS", "unit": 1, "amount": 1.99},
+        ],
+    }
+    items = {i["item_number"]: i for i in parse_any_costco_payload([receipt])[0]["items"]}
+    assert items["111"]["net_amount"] == -19.99
+    assert (items["222"]["discount_amount"], items["222"]["net_amount"]) == (0.0, 1.99)
+
+
+def test_unmatched_coupon_stays_separate_line():
+    receipt = {
+        "transactionBarcode": "R-ORPHAN",
+        "transactionDate": "2026-10-10",
+        "itemArray": [
+            {"itemNumber": "222", "itemDescription01": "BANANAS", "unit": 1, "amount": 1.99},
+            {"itemNumber": "387027", "itemDescription01": "/ 9999999", "unit": -1, "amount": -3.00},
+        ],
+    }
+    r = parse_any_costco_payload([receipt])[0]
+    items = {i["item_number"]: i for i in r["items"]}
+    assert items["222"]["net_amount"] == 1.99
+    assert items["387027"]["net_amount"] == -3.00
+    assert round(sum(i["net_amount"] for i in r["items"]), 2) == -1.01
+
+
+def test_online_order_level_discount_and_fee_lines():
+    # Формат getOrderDetails после _flatten_order_details: скидка только на уровне заказа
+    order = {
+        "orderNumber": "555",
+        "orderPlacedDate": "2026-10-05",
+        "merchandiseTotal": 100.00,
+        "discountAmount": 20.00,
+        "orderTotal": 85.00,
+        "orderLineItems": [
+            {"itemNumber": "A1", "itemDescription": "TV", "unitPrice": 75, "quantity": 1, "merchandiseTotal": 75},
+            {"itemNumber": "B2", "itemDescription": "MOUNT", "unitPrice": 25, "quantity": 1, "merchandiseTotal": 25},
+            {"itemNumber": "FEE1", "itemDescription": "DELIVERY FEE", "unitPrice": 5, "quantity": 1,
+             "merchandiseTotal": 5, "isFeeItem": True},
+        ],
+    }
+    r = parse_any_costco_payload([order])[0]
+    items = {i["item_number"]: i for i in r["items"]}
+    assert set(items) == {"A1", "B2"}
+    assert (items["A1"]["discount_amount"], items["A1"]["net_amount"]) == (15.0, 60.0)
+    assert (items["B2"]["discount_amount"], items["B2"]["net_amount"]) == (5.0, 20.0)
+    assert r["instant_savings"] == 20.0

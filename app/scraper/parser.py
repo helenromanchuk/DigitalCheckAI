@@ -3,8 +3,9 @@ import re
 from typing import Any
 
 
-# Ссылка купона на товар в чеке Costco: "TPD/1234567", "/1234567", "/ 1234567" или "#1234567"
-DISCOUNT_REF_RE = re.compile(r"(?:TPD/|/|#)\s*(\d{3,12})")
+# Ссылка купона на товар в чеке Costco: "TPD/1234567", "/1234567", "/ 1234567" или "#1234567".
+# Только в начале описания — иначе возврат вроде "KS TOWEL 12/120CT" принимается за купон.
+DISCOUNT_REF_RE = re.compile(r"^(?:TPD/|/|#)\s*(\d{3,12})\b")
 GAS_KEYWORDS = {"UNLEADED", "REGULAR", "PREMIUM", "GASOLINE", "DIESEL", "FUEL"}
 # Отделы Costco с товарами на развес (мясо, деликатесы и сыры, рыба/сервисный деликатес) —
 # по реальным чекам: только в них сумма строки = вес × цена за фунт
@@ -96,7 +97,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
 
     raw_items = raw_receipt.get("itemArray") or raw_receipt.get("items") or []
     normalized_items: list[dict[str, Any]] = []
-    pending_discounts: list[tuple[str | None, float]] = []
+    pending_discounts: list[tuple[str | None, float, dict[str, Any]]] = []
 
     for raw_item in raw_items:
         # Если чек уже в нормализованном внутреннем формате
@@ -113,7 +114,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
             # Если target_item_num не указан явно, привязываем к последней добавленной позиции
             if not target_item_num and normalized_items:
                 target_item_num = normalized_items[-1]["item_number"]
-            pending_discounts.append((target_item_num, discount_val))
+            pending_discounts.append((target_item_num, discount_val, raw_item))
             continue
 
         item_number = str(raw_item.get("itemNumber") or raw_item.get("item_number") or "").strip()
@@ -168,21 +169,36 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
 
     # Применяем скидки к соответствующим товарам
     total_discounts_applied = 0.0
-    for target_num, disc_val in pending_discounts:
-        matched = False
+    for target_num, disc_val, raw_item in pending_discounts:
+        target = None
         if target_num:
-            for item in reversed(normalized_items):
-                if item["item_number"] == target_num and item["gross_amount"] > 0:
-                    item["discount_amount"] = round(item["discount_amount"] + disc_val, 2)
-                    item["net_amount"] = round(item["gross_amount"] - item["discount_amount"], 2)
-                    total_discounts_applied = round(total_discounts_applied + disc_val, 2)
-                    matched = True
-                    break
-        if not matched and normalized_items:
-            last_item = normalized_items[-1]
-            last_item["discount_amount"] = round(last_item["discount_amount"] + disc_val, 2)
-            last_item["net_amount"] = round(last_item["gross_amount"] - last_item["discount_amount"], 2)
+            target = next(
+                (i for i in reversed(normalized_items) if i["item_number"] == target_num and i["gross_amount"] > 0),
+                None,
+            )
+        if target is not None:
+            target["discount_amount"] = round(target["discount_amount"] + disc_val, 2)
+            target["net_amount"] = round(target["gross_amount"] - target["discount_amount"], 2)
             total_discounts_applied = round(total_discounts_applied + disc_val, 2)
+            continue
+        # Купон не нашёл свой товар: не вешаем его на случайную позицию,
+        # а сохраняем отдельной отрицательной строкой (это может быть и возврат)
+        item_number = str(raw_item.get("itemNumber") or "").strip() or f"DISCOUNT-{target_num or 'UNKNOWN'}"
+        desc = str(raw_item.get("itemDescription01") or "").strip() or f"DISCOUNT #{item_number}"
+        amount = -disc_val
+        normalized_items.append(
+            {
+                "item_number": item_number,
+                "raw_description": desc,
+                "quantity": round(_to_float(raw_item.get("unit"), -1.0) or -1.0, 3),
+                "unit_price": disc_val,
+                "gross_amount": amount,
+                "discount_amount": 0.0,
+                "net_amount": amount,
+                "tax_flag": str(raw_item.get("taxFlag") or ""),
+                "is_weight": False,
+            }
+        )
 
     subtotal = _to_float(raw_receipt.get("subTotal") or raw_receipt.get("subtotal"), 0.0)
     tax = _to_float(raw_receipt.get("taxes") or raw_receipt.get("tax"), 0.0)
@@ -245,8 +261,14 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
     normalized_items: list[dict[str, Any]] = []
     total_discount = 0.0
 
+    fees = 0.0
+
     for idx, line in enumerate(line_items, start=1):
-        item_num = str(line.get("itemNumber") or line.get("item_number") or f"ONL-{idx}").strip()
+        if line.get("isFeeItem"):
+            # Сборы (доставка, утилизация и т.п.) — не товары: не классифицируем и не считаем в категориях
+            fees = round(fees + _to_float(line.get("merchandiseTotal") or line.get("unitPrice"), 0.0), 2)
+            continue
+        item_num =str(line.get("itemNumber") or line.get("item_number") or f"ONL-{idx}").strip()
         desc = str(
             line.get("itemDescription")
             or line.get("productName")
@@ -280,6 +302,22 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
             }
         )
 
+    # getOrderDetails отдаёт скидку только на уровне заказа — раскладываем её по позициям
+    # пропорционально сумме, чтобы статистика категорий видела реально оплаченное
+    order_discount = abs(_to_float(raw_order.get("discountAmount"), 0.0))
+    unallocated = round(order_discount - total_discount, 2)
+    gross_sum = sum(i["gross_amount"] for i in normalized_items if i["gross_amount"] > 0)
+    if unallocated > 0 and gross_sum > 0:
+        allocatable = [i for i in normalized_items if i["gross_amount"] > 0]
+        remaining = unallocated
+        for n, item in enumerate(allocatable, start=1):
+            # Последней позиции — остаток, чтобы копейки от округления не терялись
+            share = remaining if n == len(allocatable) else round(unallocated * item["gross_amount"] / gross_sum, 2)
+            remaining = round(remaining - share, 2)
+            item["discount_amount"] = round(item["discount_amount"] + share, 2)
+            item["net_amount"] = round(item["gross_amount"] - item["discount_amount"], 2)
+        total_discount = round(total_discount + unallocated, 2)
+
     subtotal = _to_float(raw_order.get("merchandiseTotal") or raw_order.get("subTotal") or raw_order.get("subtotal"), 0.0)
     tax = _to_float(raw_order.get("orderTax") or raw_order.get("totalTax") or raw_order.get("tax"), 0.0)
     shipping = _to_float(raw_order.get("shippingAndHandling") or raw_order.get("shippingTotal"), 0.0)
@@ -289,7 +327,7 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
     if subtotal == 0.0:
         subtotal = items_net_sum
     if total == 0.0:
-        total = round(subtotal + tax + shipping, 2)
+        total = round(subtotal + tax + shipping + fees, 2)
 
     return {
         "transaction_barcode": barcode,

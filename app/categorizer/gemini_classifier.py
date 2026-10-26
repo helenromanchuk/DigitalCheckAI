@@ -253,11 +253,17 @@ class GeminiItemClassifier:
 
         parsed_data = json.loads(response.text)
         raw_map = {str(i["item_number"]): str(i.get("raw_description", "")) for i in batch}
+        # Gemini может вернуть артикул с ведущими нулями или пробелами — сводим к исходному
+        loose_map = {k.strip().lstrip("0"): k for k in raw_map}
         results: list[dict[str, str]] = []
 
         for entry in parsed_data.get("items", []):
-            inum = str(entry.get("item_number", "")).strip()
+            returned = str(entry.get("item_number", "")).strip()
+            inum = returned if returned in raw_map else loose_map.get(returned.lstrip("0"))
             if not inum:
+                # Чужой или выдуманный артикул не должен создавать/перезаписывать записи каталога;
+                # товар из пакета останется pending и уйдёт в следующую классификацию
+                logger.warning("Gemini вернул артикул не из пакета: %r", returned)
                 continue
             cat = str(entry.get("category", "Прочее")).strip()
             if cat not in categories:
