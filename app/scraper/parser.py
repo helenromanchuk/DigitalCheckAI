@@ -6,7 +6,9 @@ from typing import Any
 # A coupon's reference to its item on a Costco receipt: "TPD/1234567", "/1234567", "/ 1234567" or "#1234567".
 # Only at the start of the description; otherwise a return like "KS TOWEL 12/120CT" is taken for a coupon.
 DISCOUNT_REF_RE = re.compile(r"^(?:TPD/|/|#)\s*(\d{3,12})\b")
-GAS_KEYWORDS = {"UNLEADED", "REGULAR", "PREMIUM", "GASOLINE", "DIESEL", "FUEL"}
+# Fuel words that are unambiguous on their own. "REGULAR"/"PREMIUM"/"FUEL" are left out: they also occur
+# in grocery descriptions ("REGULAR COFFEE", "PREMIUM CHICKEN"). Whole words only.
+GAS_KEYWORDS_RE = re.compile(r"\b(?:UNLEADED|GASOLINE|DIESEL)\b")
 # Costco departments with sold-by-weight items (meat, deli and cheese, seafood/service deli).
 # Based on real receipts, only in these is the line amount = weight × price per pound
 WEIGHT_DEPARTMENTS = {19, 61, 63}
@@ -93,7 +95,9 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
     ).strip()
 
     doc_type = str(raw_receipt.get("documentType") or raw_receipt.get("receiptType") or "").lower()
-    is_gas = "fuel" in doc_type or "gas" in doc_type
+    is_gas_doc = "fuel" in doc_type or "gas" in doc_type
+    is_warehouse_doc = "warehouse" in doc_type
+    is_gas = is_gas_doc
 
     raw_items = raw_receipt.get("itemArray") or raw_receipt.get("items") or []
     normalized_items: list[dict[str, Any]] = []
@@ -130,7 +134,13 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
         if qty == 0:
             qty = 1.0
         upper_desc = full_raw_desc.upper()
-        is_fuel_line = any(kw in upper_desc for kw in GAS_KEYWORDS) or bool(raw_item.get("fuelGradeDescription"))
+        # Every line of a gas station receipt is fuel. On a warehouse receipt only explicit fuel fields count;
+        # description keywords are checked only when the document type is unknown
+        is_fuel_line = (
+            is_gas_doc
+            or bool(raw_item.get("fuelGradeDescription"))
+            or (not is_warehouse_doc and bool(GAS_KEYWORDS_RE.search(upper_desc)))
+        )
         if is_fuel_line:
             is_gas = True
 
@@ -161,7 +171,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
             # Fuel is sold in gallons, not pounds
             "is_weight": sold_by_measure and not is_fuel_line,
         }
-        if is_gas:
+        if is_fuel_line:
             item_entry["default_category"] = "Авто и заправка (Gas Station)"
             item_entry["default_clean_name"] = f"Топливо Costco ({full_raw_desc})"
 

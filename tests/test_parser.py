@@ -202,3 +202,33 @@ def test_online_order_level_discount_and_fee_lines():
     assert (items["A1"]["discount_amount"], items["A1"]["net_amount"]) == (15.0, 60.0)
     assert (items["B2"]["discount_amount"], items["B2"]["net_amount"]) == (5.0, 20.0)
     assert r["instant_savings"] == 20.0
+
+
+def test_grocery_words_on_warehouse_receipt_are_not_fuel():
+    receipt = {
+        "transactionBarcode": "21000000000002610261200",
+        "transactionDateTime": "2026-10-26T12:00:00",
+        "documentType": "WarehouseReceiptDetail",
+        "receiptType": "In-Warehouse",
+        "itemArray": [
+            {"itemNumber": "1000001", "itemDescription01": "REGULAR COFFEE", "unit": 1, "amount": 14.99},
+            {"itemNumber": "1000002", "itemDescription01": "MILK", "unit": 1, "amount": 4.59},
+            {"itemNumber": "1000003", "itemDescription01": "PREMIUM CHICKEN", "unit": 1, "amount": 9.99},
+        ],
+    }
+
+    r = parse_any_costco_payload([receipt])[0]
+    assert r["receipt_type"] == "warehouse"
+    assert all("default_category" not in i for i in r["items"])
+
+
+def test_fuel_keywords_used_only_when_document_type_is_unknown():
+    receipt = {
+        "transactionBarcode": "GAS-NO-DOCTYPE",
+        "transactionDateTime": "2026-10-26T12:00:00",
+        "itemArray": [{"itemNumber": "800877", "itemDescription01": "UNLEADED", "unit": 10, "amount": 45.0}],
+    }
+
+    r = parse_any_costco_payload([receipt])[0]
+    assert r["receipt_type"] == "gas"
+    assert r["items"][0]["default_category"] == "Авто и заправка (Gas Station)"
