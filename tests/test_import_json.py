@@ -1,4 +1,4 @@
-"""Тесты импорта JSON-файлов Costco и Safeway (формат файлов скриптов выгрузки из справки)."""
+"""Tests for importing Costco and Safeway JSON files (the format produced by the export scripts in the help)."""
 import json
 from pathlib import Path
 
@@ -33,10 +33,10 @@ def test_import_safeway_export_file(tmp_path: Path, monkeypatch):
 
     receipts = client.get("/api/receipts?store=safeway").json()["receipts"]
     assert [r["transaction_barcode"] for r in receipts] == ["SWY-12345678901234567890123"]
-    # URL картинки сохранён, файл скачается при импорте
+    # The image URL is saved; the file is downloaded during import
     assert [m["item_number"] for m in test_db.get_items_missing_images()] == ["SWY-6927607035"]
 
-    # Повторный импорт не создаёт дублей
+    # Importing again doesn't create duplicates
     again = _upload(client, {"source": "safeway", "receipts": [SAMPLE_SAFEWAY_RECEIPT]}).json()
     assert (again["inserted_receipts"], again["updated_receipts"]) == (0, 1)
 

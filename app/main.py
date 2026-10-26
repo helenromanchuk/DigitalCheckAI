@@ -1,4 +1,4 @@
-"""Главный модуль FastAPI приложения DigitalCheckAI."""
+"""DigitalCheckAI FastAPI application entry point."""
 from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
@@ -13,7 +13,7 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(
     title="DigitalCheckAI",
-    description="Локальная аналитика покупок и чеков Costco и Safeway с расшифровкой товаров через Gemini API",
+    description="Local analytics for Costco and Safeway purchases and receipts, with item decoding via the Gemini API",
     version="1.0.0",
 )
 
@@ -22,7 +22,7 @@ app.include_router(api_router)
 
 @app.middleware("http")
 async def revalidate_frontend(request, call_next):
-    """Страница и скрипты меняются вместе с кодом: браузер должен перепроверять их при каждой загрузке."""
+    """The page and scripts change with the code, so the browser must revalidate them on every load."""
     response = await call_next(request)
     if request.url.path == "/" or request.url.path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache"
@@ -33,5 +33,5 @@ app.mount("/images", StaticFiles(directory=str(IMAGES_DIR)), name="images")
 
 @app.get("/")
 def serve_dashboard() -> FileResponse:
-    """Отдаёт главную страницу веб-дашборда."""
+    """Serves the dashboard's main page."""
     return FileResponse(str(STATIC_DIR / "index.html"))

@@ -1,1 +1,1 @@
-"""Модуль расшифровки сокращений Costco и категоризации товаров через Gemini API."""
+"""Decodes Costco abbreviations and categorizes items with the Gemini API."""

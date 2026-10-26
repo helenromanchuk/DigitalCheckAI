@@ -1,5 +1,5 @@
-// DigitalCheckAI: выгрузка всех чеков Safeway (покупки в магазине) в файл safeway-receipts.json.
-// Запускать в консоли браузера (F12 → Console) на www.safeway.com после входа в аккаунт.
+// DigitalCheckAI: exports all Safeway receipts (in-store purchases) to safeway-receipts.json.
+// Run it in the browser console (F12 → Console) on www.safeway.com after signing in.
 (async () => {
   const info = (window.AB && window.AB.userInfo) || {};
   if (!info.SWY_SHOP_TOKEN || !info.clubCard) {

@@ -1,4 +1,4 @@
-"""Сервис расшифровки Item# и категоризации покупок Costco с помощью Gemini API и кэшированием в SQLite."""
+"""Decodes Costco Item #s and categorizes purchases with the Gemini API, caching results in SQLite."""
 import json
 import logging
 from typing import Any
@@ -24,7 +24,7 @@ class CategorizedBatchSchema(BaseModel):
     items: list[CategorizedItemSchema]
 
 
-# Локальный резервный словарь для работы до ввода GEMINI_API_KEY
+# Local fallback dictionary used until GEMINI_API_KEY is set
 FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
     (
         ["UNLEADED", "GASOLINE", "FUEL", "DIESEL"],
@@ -126,7 +126,7 @@ FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
 
 
 def fallback_categorize_item(item_number: str, raw_description: str) -> dict[str, str]:
-    """Локальная расшифровка и категоризация по словарю (используется только если нет GEMINI_API_KEY)."""
+    """Local dictionary-based decoding and categorization (used only when GEMINI_API_KEY is missing)."""
     upper = raw_description.upper().strip()
     for keywords, category, exact_map in FALLBACK_RULES:
         if upper in exact_map:
@@ -155,9 +155,9 @@ def fallback_categorize_item(item_number: str, raw_description: str) -> dict[str
 
 class GeminiItemClassifier:
     """
-    Классификатор товаров Costco.
-    При первом появлении Item# отправляет его в Gemini API для расшифровки и категоризации,
-    сохраняя результат в локальную БД SQLite.
+    Costco item classifier.
+    The first time an Item # appears, sends it to the Gemini API for decoding and categorization
+    and stores the result in the local SQLite database.
     """
 
     def __init__(self, db: Database, batch_size: int = 40) -> None:
@@ -166,8 +166,8 @@ class GeminiItemClassifier:
 
     def classify_new_items(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         """
-        Принимает список новых товаров (только тех, которых ещё не было в item_catalog,
-        или ожидающих классификации), расшифровывает через Gemini API и сохраняет в БД.
+        Takes a list of new items (ones not yet in item_catalog, or still pending
+        classification), decodes them with the Gemini API, and saves them to the database.
         """
         if not items:
             return {"classified_count": 0, "provider": "none"}
@@ -208,11 +208,11 @@ class GeminiItemClassifier:
         categories: list[str],
         api_key: str,
     ) -> list[dict[str, str]]:
-        """Вызывает Google GenAI SDK со строгой JSON-схемой для пакета артикулов Costco."""
+        """Calls the Google GenAI SDK with a strict JSON schema for a batch of Costco item numbers."""
         from google import genai
         from google.genai import types
 
-        # Без таймаута зависший запрос к Gemini блокирует синхронизацию бесконечно; ошибка уйдёт в fallback
+        # Without a timeout a hung Gemini request blocks sync forever; on error the batch goes to the fallback
         client = genai.Client(
             api_key=api_key,
             http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS),
@@ -253,7 +253,7 @@ class GeminiItemClassifier:
 
         parsed_data = json.loads(response.text)
         raw_map = {str(i["item_number"]): str(i.get("raw_description", "")) for i in batch}
-        # Gemini может вернуть артикул с ведущими нулями или пробелами — сводим к исходному
+        # Gemini may return an item number with leading zeros or spaces; map it back to the original
         loose_map = {k.strip().lstrip("0"): k for k in raw_map}
         results: list[dict[str, str]] = []
 
@@ -261,8 +261,8 @@ class GeminiItemClassifier:
             returned = str(entry.get("item_number", "")).strip()
             inum = returned if returned in raw_map else loose_map.get(returned.lstrip("0"))
             if not inum:
-                # Чужой или выдуманный артикул не должен создавать/перезаписывать записи каталога;
-                # товар из пакета останется pending и уйдёт в следующую классификацию
+                # An unknown or made-up item number must not create or overwrite catalog rows;
+                # the batch item stays pending and goes into the next classification run
                 logger.warning("Gemini вернул артикул не из пакета: %r", returned)
                 continue
             cat = str(entry.get("category", "Прочее")).strip()

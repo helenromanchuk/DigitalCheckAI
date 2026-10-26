@@ -1,24 +1,24 @@
 # DigitalCheckAI 🛒📊
 
-Локальное веб-приложение для скачивания чеков и заказов с сайтов **costco.com** и **safeway.com**, автоматической расшифровки сокращённых названий товаров (`Item #`) через **Gemini API** и визуализации статистики расходов по категориям за любой период.
+A local web app that downloads receipts and orders from **costco.com** and **safeway.com**, decodes abbreviated product names (`Item #`) with the **Gemini API**, and visualizes spending by category for any period.
 
-## Возможности
-- **Выгрузка всех типов покупок с Costco.com**:
-  - 🏪 Покупки на складах (**In-Warehouse Receipts**)
-  - ⛽ Заправки (**Costco Gas Station**)
-  - 📦 Онлайн-заказы (**Costco.com Online Orders**)
-- **Покупки в магазинах Safeway** (In-Store Purchases) с фото товаров, ценой до и после скидки.
-- **Поиск по всем магазинам** с ценой за фунт и за унцию.
-- **Импорт JSON** для Costco и Safeway: готовые скрипты выгрузки для консоли браузера — в справке «?» рядом с кнопкой импорта.
-- **Корректный учёт купонов (Instant Savings / TPD)**: строки скидок автоматически привязываются к соответствующему `Item #` и вычитаются из его стоимости (`net_amount`).
-- **Умная категоризация по `Item #`**:
-  1. При первой встрече нового `Item #` его сокращённое название из чека (например, `KS ORG EVOO`) отправляется в **Gemini API** (`gemini-2.5-flash`), который возвращает полное понятное название и категорию.
-  2. Результат сохраняется в локальную базу SQLite (`data/costco.db` -> таблица `item_catalog`). При повторных покупках этого `Item #` данные берутся мгновенно из локальной базы без повторных запросов к Gemini.
-  3. Вы можете в любой момент **вручную поменять категорию или название** любого товара прямо в таблице на дашборде — статистика по всем чекам мгновенно пересчитается.
+## Features
+- **Every Costco.com purchase type**:
+  - 🏪 Warehouse purchases (**In-Warehouse Receipts**)
+  - ⛽ Fuel (**Costco Gas Station**)
+  - 📦 Online orders (**Costco.com Online Orders**)
+- **Safeway in-store purchases** with product photos and prices before and after discounts.
+- **Search across all stores**, with price per pound and per ounce.
+- **JSON import** for Costco and Safeway: ready-made export scripts for the browser console are in the "?" help next to the import button.
+- **Correct coupon handling (Instant Savings / TPD)**: discount lines are attached to their `Item #` and subtracted from its amount (`net_amount`).
+- **Smart categorization by `Item #`**:
+  1. The first time a new `Item #` appears, its abbreviated receipt name (e.g. `KS ORG EVOO`) is sent to the **Gemini API** (`gemini-2.5-flash`), which returns a full readable name and a category.
+  2. The result is stored in the local SQLite database (`data/costco.db` -> `item_catalog` table). Later purchases of the same `Item #` read it from the local database without calling Gemini again.
+  3. You can **change any item's category or name by hand** at any time, right in the dashboard table, and the statistics for all receipts update immediately.
 
-## Быстрый старт (Windows)
+## Quick start (Windows)
 
-Дважды кликните по файлу **`run.bat`** или выполните в терминале:
+Double-click **`run.bat`** or run in a terminal:
 
 ```powershell
 python -m venv .venv
@@ -27,13 +27,13 @@ python -m venv .venv
 .\.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-После запуска откройте в браузере: **http://localhost:8000**
+Then open **http://localhost:8000** in your browser.
 
-## Настройка Gemini API Key
-1. Нажмите кнопку **«Указать ключ Gemini API»** в правом верхнем углу дашборда (или пропишите `GEMINI_API_KEY=...` в файле `.env`).
-2. Ключ сохраняется локально в `.env`.
+## Gemini API key
+1. Click **"Указать ключ Gemini API"** ("Set Gemini API key") in the top right corner of the dashboard, or set `GEMINI_API_KEY=...` in the `.env` file.
+2. The key is stored locally in `.env`.
 
-## Запуск тестов
+## Running tests
 ```powershell
 .\.venv\Scripts\python -m pytest -v
 ```

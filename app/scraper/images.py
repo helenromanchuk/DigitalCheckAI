@@ -1,4 +1,4 @@
-"""Скачивание картинок товаров в локальную папку data/images."""
+"""Downloads item images into the local data/images folder."""
 import logging
 import re
 
@@ -18,9 +18,9 @@ def _image_filename(item_number: str) -> str:
 
 def download_missing_images(db: Database) -> int:
     """
-    Скачивает картинки для товаров, у которых в справочнике есть image_url, но нет файла.
-    Ошибки отдельных картинок не прерывают синхронизацию; такие товары будут повторены
-    при следующем запуске. Возвращает количество скачанных картинок.
+    Downloads images for catalog items that have an image_url but no local file.
+    A failed image doesn't stop the sync; those items are retried on the next run.
+    Returns the number of images downloaded.
     """
     pending = db.get_items_missing_images()
     if not pending:

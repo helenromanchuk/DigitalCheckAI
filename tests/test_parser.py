@@ -1,4 +1,4 @@
-"""Тесты парсера чеков Costco (In-Warehouse, Gas Station, Online Orders и купоны TPD)."""
+"""Tests for the Costco receipt parser (In-Warehouse, Gas Station, Online Orders and TPD coupons)."""
 from app.scraper.parser import parse_any_costco_payload
 
 
@@ -116,7 +116,7 @@ def test_parse_gas_and_online_orders():
 
 
 def test_hash_and_slash_coupons_and_weight_items():
-    # Фрагмент реального чека: купоны в форматах "#1327673" и "/ 1881410", свинина на вес
+    # Excerpt from a real receipt: coupons in "#1327673" and "/ 1881410" formats, pork sold by weight
     receipt = {
         "transactionBarcode": "21000000000002609111020",
         "transactionDateTime": "2026-09-11T10:20:00",
@@ -138,20 +138,20 @@ def test_hash_and_slash_coupons_and_weight_items():
     r = parse_any_costco_payload([receipt])[0]
     items = {i["item_number"]: i for i in r["items"]}
 
-    # Купоны не стали отдельными товарами, а вычлись из своих позиций
+    # Coupons didn't become separate items; they were subtracted from their items
     assert set(items) == {"1327673", "1881410", "21647"}
     assert (items["1327673"]["discount_amount"], items["1327673"]["net_amount"]) == (1.0, 7.89)
     assert (items["1881410"]["discount_amount"], items["1881410"]["net_amount"]) == (2.5, 7.39)
     assert r["instant_savings"] == 3.5
 
-    # Весовой товар: количество — это вес (18.92 / 3.49 ≈ 5.421 lb), сумма не меняется
+    # Sold by weight: quantity is the weight (18.92 / 3.49 ≈ 5.421 lb), the amount is unchanged
     assert items["21647"]["quantity"] == 5.421
     assert items["21647"]["net_amount"] == 18.92
     assert round(sum(i["net_amount"] for i in r["items"]), 2) == r["total"]
 
 
 def test_return_line_with_slash_is_not_a_coupon():
-    # Возврат с "/" в описании не должен вычитаться из последней позиции чека
+    # A return with "/" in its description must not be subtracted from the last item on the receipt
     receipt = {
         "transactionBarcode": "R-RETURN",
         "transactionDate": "2026-10-10",
@@ -182,7 +182,7 @@ def test_unmatched_coupon_stays_separate_line():
 
 
 def test_online_order_level_discount_and_fee_lines():
-    # Формат getOrderDetails после _flatten_order_details: скидка только на уровне заказа
+    # getOrderDetails format after _flatten_order_details: the discount is only at the order level
     order = {
         "orderNumber": "555",
         "orderPlacedDate": "2026-10-05",

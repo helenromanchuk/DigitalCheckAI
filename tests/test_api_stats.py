@@ -1,4 +1,4 @@
-"""Интеграционные тесты FastAPI эндпоинтов статистики, фильтрации периода и смены категории."""
+"""Integration tests for the FastAPI stats endpoints, period filtering, and category changes."""
 import json
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -53,7 +53,7 @@ def test_api_import_stats_and_category_override(tmp_path: Path, monkeypatch):
         },
     ]
 
-    # 1. Импортируем чеки через /api/import
+    # 1. Import receipts via /api/import
     res_import = client.post(
         "/api/import",
         files={"file": ("receipts.json", json.dumps(sample_payload).encode("utf-8"), "application/json")},
@@ -62,21 +62,21 @@ def test_api_import_stats_and_category_override(tmp_path: Path, monkeypatch):
     import_data = res_import.json()
     assert import_data["fetched_receipts"] == 3
 
-    # 2. Запрашиваем статистику по всем типам покупок
+    # 2. Request stats for all purchase types
     res_stats = client.get("/api/stats?receipt_type=all")
     assert res_stats.status_code == 200
     stats = res_stats.json()
     assert stats["summary"]["receipt_count"] == 3
     assert stats["summary"]["total_spent"] > 0
 
-    # 3. Фильтруем только заправки (gas)
+    # 3. Filter to fuel only (gas)
     res_gas = client.get("/api/stats?receipt_type=gas")
     assert res_gas.status_code == 200
     gas_stats = res_gas.json()
     assert gas_stats["summary"]["receipt_count"] == 1
     assert gas_stats["by_category"][0]["category"] == "Авто и заправка (Gas Station)"
 
-    # 4. Меняем категорию товара #678910 через PATCH /api/items/678910
+    # 4. Change the category of item #678910 via PATCH /api/items/678910
     res_patch = client.patch(
         "/api/items/678910",
         json={"category": "Подарки и кулинария", "clean_name": "Масло оливковое KS 2L"},
@@ -86,7 +86,7 @@ def test_api_import_stats_and_category_override(tmp_path: Path, monkeypatch):
     assert patched["category"] == "Подарки и кулинария"
     assert patched["is_manual_override"] == 1
 
-    # Убеждаемся, что новая категория появилась в статистике с суммой 2 покупок (24.99 * 2 = 49.98)
+    # The new category appears in stats with the total of 2 purchases (24.99 * 2 = 49.98)
     res_stats_after = client.get("/api/stats?receipt_type=all")
     cats_after = {c["category"]: c["net_spent"] for c in res_stats_after.json()["by_category"]}
     assert cats_after.get("Подарки и кулинария") == 49.98
@@ -101,7 +101,7 @@ def test_membership_card_profitability_analytics(tmp_path: Path, monkeypatch):
 
     client = TestClient(app)
 
-    # 1. Импортируем чек со склада ($1000 чистыми + $50 алкоголь + $80 налог) и заправку ($200 бензин)
+    # 1. Import a warehouse receipt ($1000 net + $50 alcohol + $80 tax) and a gas receipt ($200 fuel)
     payload_low = [
         {
             "transactionBarcode": "W-100",
@@ -134,8 +134,8 @@ def test_membership_card_profitability_analytics(tmp_path: Path, monkeypatch):
         files={"file": ("low.json", json.dumps(payload_low).encode("utf-8"), "application/json")},
     )
 
-    # Проверяем аналитику с исключением алкоголя (по умолчанию exclude_alcohol=true):
-    # eligible_spend = 1000.00 (бензин $200, налог $80 и алкоголь $50 исключены)
+    # Check the analytics with alcohol excluded (exclude_alcohol=true by default):
+    # eligible_spend = 1000.00 (fuel $200, tax $80 and alcohol $50 are excluded)
     res_mb_1 = client.get("/api/membership-analytics?year=2026&exclude_alcohol=true")
     assert res_mb_1.status_code == 200
     mb1 = res_mb_1.json()
@@ -144,11 +144,11 @@ def test_membership_card_profitability_analytics(tmp_path: Path, monkeypatch):
     assert mb1["spend_breakdown"]["excluded_tax"] == 80.00
     assert mb1["spend_breakdown"]["excluded_alcohol_spent"] == 50.00
     assert mb1["spend_breakdown"]["eligible_spend"] == 1000.00
-    assert mb1["comparison"]["estimated_reward"] == 20.00  # 2% от $1000
+    assert mb1["comparison"]["estimated_reward"] == 20.00  # 2% of $1000
     assert mb1["comparison"]["recommended_card"] == "gold_star"
     assert mb1["comparison"]["spend_needed_for_breakeven"] == 2250.00  # $3250 - $1000
 
-    # 2. Добавляем онлайн-заказ на $3,000 -> общая база становится $4,000 (> $3,250 точки безубыточности)
+    # 2. Add a $3,000 online order -> the base becomes $4,000 (> the $3,250 break-even point)
     payload_high = [
         {
             "orderNumber": "555000111",
@@ -177,9 +177,9 @@ def test_membership_card_profitability_analytics(tmp_path: Path, monkeypatch):
     assert res_mb_2.status_code == 200
     mb2 = res_mb_2.json()
     assert mb2["spend_breakdown"]["eligible_spend"] == 4000.00
-    assert mb2["comparison"]["estimated_reward"] == 80.00  # 2% от $4000 = $80
+    assert mb2["comparison"]["estimated_reward"] == 80.00  # 2% of $4000 = $80
     assert mb2["comparison"]["recommended_card"] == "executive"
-    assert mb2["comparison"]["exec_advantage_vs_gold"] == 15.00  # $80 кэшбэк - $65 доплата = +$15 чистой выгоды
+    assert mb2["comparison"]["exec_advantage_vs_gold"] == 15.00  # $80 reward - $65 upgrade fee = +$15 net benefit
     assert mb2["comparison"]["spend_needed_for_breakeven"] == 0.0
 
     app.dependency_overrides.clear()

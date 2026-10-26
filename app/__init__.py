@@ -1,1 +1,1 @@
-"""Пакет приложения DigitalCheckAI."""
+"""DigitalCheckAI application package."""

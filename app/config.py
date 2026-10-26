@@ -1,4 +1,4 @@
-"""Конфигурация приложения DigitalCheckAI."""
+"""DigitalCheckAI configuration."""
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -35,13 +35,13 @@ DEFAULT_CATEGORIES: list[str] = [
 
 
 def get_gemini_api_key() -> str:
-    """Возвращает актуальный GEMINI_API_KEY из окружения или .env файла."""
+    """Returns the current GEMINI_API_KEY from the environment or the .env file."""
     load_dotenv(ENV_PATH, override=True)
     return os.getenv("GEMINI_API_KEY", "").strip()
 
 
 def save_gemini_api_key(api_key: str) -> None:
-    """Сохраняет GEMINI_API_KEY в локальный файл .env и обновляет окружение."""
+    """Saves GEMINI_API_KEY to the local .env file and updates the environment."""
     clean_key = api_key.strip()
     os.environ["GEMINI_API_KEY"] = clean_key
 
@@ -61,5 +61,5 @@ def save_gemini_api_key(api_key: str) -> None:
 
 
 def get_gemini_model() -> str:
-    """Возвращает имя модели Gemini для категоризации."""
+    """Returns the Gemini model name used for categorization."""
     return os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()

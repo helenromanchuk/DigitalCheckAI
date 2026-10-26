@@ -1,7 +1,7 @@
-# Ключи и локальные настройки
+# Keys and local settings
 .env
 
-# Личные данные: база чеков, бэкапы, фото товаров, профиль браузера с сессиями Costco/Safeway
+# Personal data: receipt database, backups, product photos, browser profile with Costco/Safeway sessions
 data/
 pdf/
 *.db

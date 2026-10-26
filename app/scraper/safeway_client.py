@@ -1,9 +1,9 @@
-"""Клиент Playwright для выгрузки чеков из магазинов Safeway (In-Store Purchases).
+"""Playwright client that downloads Safeway in-store receipts (In-Store Purchases).
 
-Сайт safeway.com берёт чеки из собственного эндпоинта /order-account/api/instore (тот же домен).
-Авторизация — токен SWY_SHOP_TOKEN и номер клубной карты из window.AB.userInfo, которые
-передаются в теле запроса. Антибот-заголовков, как у Costco, не требуется: обычный fetch
-со страницы залогиненного пользователя работает.
+safeway.com loads receipts from its own /order-account/api/instore endpoint (same domain).
+Auth is the SWY_SHOP_TOKEN token and the club card number from window.AB.userInfo, both
+sent in the request body. No anti-bot headers are needed as with Costco: a plain fetch
+from a signed-in user's page works.
 """
 import asyncio
 import json
@@ -21,13 +21,13 @@ SAFEWAY_INSTORE_API_PATH = "/order-account/api/instore"
 SAFEWAY_BANNER = "safeway"
 REQUEST_PAUSE_SECONDS = 0.3
 
-# Публичный CDN картинок Albertsons/Safeway по номеру товара (bpn); без bpn картинки нет (403)
+# Public Albertsons/Safeway image CDN keyed by item number (bpn); without a bpn there is no image (403)
 SAFEWAY_IMAGE_URL = "https://images.albertsons-media.com/is/image/ABS/{bpn}?wid=300&hei=300&fmt=jpg"
 
 ITEM_NUMBER_PREFIX = "SWY-"
 BARCODE_PREFIX = "SWY-"
 
-# Запрос к API чеков изнутри страницы safeway.com (cookies и токен берутся из сессии).
+# Calls the receipts API from inside a safeway.com page (cookies and token come from the session).
 _PAGE_INSTORE_JS = """
 async ({ path, params, banner }) => {
     const info = (window.AB && window.AB.userInfo) || {};
@@ -44,7 +44,7 @@ async ({ path, params, banner }) => {
 }
 """
 
-# Пользователь вошёл, когда на странице есть и токен, и номер клубной карты (у гостя карты нет).
+# The user is signed in when the page has both a token and a club card number (guests have no card).
 _IS_LOGGED_IN_JS = """
 () => {
     const info = (window.AB && window.AB.userInfo) || {};
@@ -54,7 +54,7 @@ _IS_LOGGED_IN_JS = """
 
 
 class SafewayApiError(RuntimeError):
-    """Ошибка ответа API чеков Safeway."""
+    """Error response from the Safeway receipts API."""
 
 
 def _money(val: Any) -> float:
@@ -68,12 +68,12 @@ def _money(val: Any) -> float:
 
 def parse_safeway_receipt(raw: dict[str, Any]) -> dict[str, Any] | None:
     """
-    Приводит чек Safeway (receipts[0] из /order-account/api/instore с параметром id)
-    к единому формату чеков приложения.
+    Converts a Safeway receipt (receipts[0] from /order-account/api/instore with the id parameter)
+    to the app's common receipt format.
 
-    Скидки уровня всего чека, не привязанные к позициям (разница между суммой позиций
-    и итогом чека), распределяются по позициям пропорционально их сумме, чтобы
-    расходы по категориям сходились с итогом чека.
+    Receipt-level discounts not tied to any line (the difference between the sum of the lines
+    and the receipt total) are spread across lines in proportion to their amounts so that
+    category spending adds up to the receipt total.
     """
     barcode = str(raw.get("barCode") or raw.get("transactionId") or raw.get("_id") or "").strip()
     if not barcode:
@@ -108,7 +108,7 @@ def parse_safeway_receipt(raw: dict[str, Any]) -> dict[str, Any] | None:
             "discount_amount": discount,
             "net_amount": net,
             "tax_flag": "",
-            # У развесного товара quantity — вес в фунтах
+            # For sold-by-weight items, quantity is the weight in pounds
             "is_weight": bool(line.get("weightItem")) and not line.get("isFuel"),
         }
         if line.get("isFuel"):
@@ -118,7 +118,7 @@ def parse_safeway_receipt(raw: dict[str, Any]) -> dict[str, Any] | None:
             item["image_url"] = SAFEWAY_IMAGE_URL.format(bpn=bpn)
         items.append(item)
 
-    # Скидка на весь чек, которой нет в позициях
+    # Receipt-wide discount that isn't on any line
     unallocated = round(sum(i["net_amount"] for i in items) - subtotal, 2)
     positive = [i for i in items if i["net_amount"] > 0]
     base = sum(i["net_amount"] for i in positive)
@@ -154,9 +154,9 @@ def _looks_like_safeway_receipt(entry: Any) -> bool:
 
 def parse_safeway_payload(payload: Any) -> list[dict[str, Any]]:
     """
-    Разбирает JSON-файл с чеками Safeway для импорта: ответ /order-account/api/instore
-    ({"receipts": [...]}), список чеков или один чек. Возвращает [], если это не формат Safeway.
-    Бросает ValueError, если это список чеков Safeway без позиций (страница списка покупок).
+    Parses a JSON file of Safeway receipts for import: an /order-account/api/instore response
+    ({"receipts": [...]}), a list of receipts, or a single receipt. Returns [] if it isn't Safeway data.
+    Raises ValueError for a list of Safeway receipts without line items (the purchase list page).
     """
     if isinstance(payload, dict) and isinstance(payload.get("receipts"), list):
         entries = payload["receipts"]
@@ -179,7 +179,7 @@ def parse_safeway_payload(payload: Any) -> list[dict[str, Any]]:
 
 
 class SafewayClient:
-    """Открывает safeway.com в браузере, ждёт входа и выгружает чеки из магазинов."""
+    """Opens safeway.com in a browser, waits for sign-in, and downloads in-store receipts."""
 
     def __init__(self) -> None:
         self.profile_dir = BROWSER_PROFILE_DIR
@@ -201,7 +201,7 @@ class SafewayClient:
     ) -> list[dict[str, Any]]:
         from playwright.sync_api import sync_playwright
 
-        # Общий профиль браузера с Costco, поэтому одновременно работает только одна синхронизация
+        # The browser profile is shared with Costco, so only one sync runs at a time
         with _sync_lock, sync_playwright() as p:
             launch_args = ["--disable-blink-features=AutomationControlled", "--start-maximized"]
             try:
@@ -265,7 +265,7 @@ class SafewayClient:
                 logged_in, cur_url = False, ""
 
             if logged_in:
-                # После входа сайт может увести на главную; API чеков вызываем со страницы покупок
+                # After sign-in the site may redirect to the home page; call the receipts API from the purchases page
                 if "/order-account/" not in cur_url and not reopened_orders_page:
                     reopened_orders_page = True
                     page.goto(SAFEWAY_ORDERS_URL, wait_until="domcontentloaded", timeout=60000)
@@ -280,7 +280,7 @@ class SafewayClient:
         )
 
     def _call(self, page: Any, params: dict[str, Any]) -> list[dict[str, Any]]:
-        """Вызывает API чеков Safeway со страницы и возвращает список receipts."""
+        """Calls the Safeway receipts API from the page and returns the receipts list."""
         resp = page.evaluate(
             _PAGE_INSTORE_JS,
             {"path": SAFEWAY_INSTORE_API_PATH, "params": params, "banner": SAFEWAY_BANNER},

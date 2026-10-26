@@ -1,4 +1,4 @@
-"""Локальное хранилище SQLite для чеков Costco, справочника товаров и аналитики."""
+"""Local SQLite storage for Costco receipts, the item catalog, and analytics."""
 import json
 import sqlite3
 from contextlib import contextmanager
@@ -11,7 +11,7 @@ from app.unit_price import add_unit_prices
 
 
 class Database:
-    """Управление базой данных SQLite для DigitalCheckAI."""
+    """Manages the DigitalCheckAI SQLite database."""
 
     def __init__(self, db_path: Path | str = DB_PATH) -> None:
         self.db_path = Path(db_path)
@@ -20,10 +20,10 @@ class Database:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        """Контекстный менеджер подключения к SQLite с возвратом строк как dict-подобных Row."""
+        """Context manager for a SQLite connection that returns rows as dict-like Row objects."""
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
-        # Встроенный lower() в SQLite понимает только ASCII; для поиска по русским названиям нужен Unicode
+        # SQLite's built-in lower() only handles ASCII; searching Russian names needs Unicode
         conn.create_function("casefold", 1, lambda s: s.casefold() if isinstance(s, str) else s, deterministic=True)
         conn.execute("PRAGMA foreign_keys = ON;")
         try:
@@ -36,7 +36,7 @@ class Database:
             conn.close()
 
     def init_db(self) -> None:
-        """Создаёт таблицы и индексы, если они ещё не существуют."""
+        """Creates tables and indexes if they don't exist yet."""
         with self.connect() as conn:
             conn.executescript(
                 """
@@ -92,24 +92,24 @@ class Database:
                 );
                 """
             )
-            # Миграция: магазин чека (costco / safeway) для баз, созданных до поддержки Safeway
+            # Migration: receipt store (costco / safeway) for databases created before Safeway support
             receipt_columns = {row["name"] for row in conn.execute("PRAGMA table_info(receipts)")}
             if "store" not in receipt_columns:
                 conn.execute("ALTER TABLE receipts ADD COLUMN store TEXT NOT NULL DEFAULT 'costco'")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_receipts_store ON receipts(store)")
-            # Миграция: картинка товара (URL источника и локальный файл в data/images)
+            # Migration: item image (source URL and local file in data/images)
             catalog_columns = {row["name"] for row in conn.execute("PRAGMA table_info(item_catalog)")}
             if "image_url" not in catalog_columns:
                 conn.execute("ALTER TABLE item_catalog ADD COLUMN image_url TEXT NOT NULL DEFAULT ''")
             if "image_file" not in catalog_columns:
                 conn.execute("ALTER TABLE item_catalog ADD COLUMN image_file TEXT NOT NULL DEFAULT ''")
-            # Миграция: развесной товар (quantity — это вес в фунтах)
+            # Migration: sold-by-weight items (quantity is the weight in pounds)
             item_columns = {row["name"] for row in conn.execute("PRAGMA table_info(receipt_items)")}
             if "is_weight" not in item_columns:
                 conn.execute("ALTER TABLE receipt_items ADD COLUMN is_weight INTEGER NOT NULL DEFAULT 0")
 
     def get_all_categories(self) -> list[str]:
-        """Возвращает объединённый список базовых и пользовательских категорий."""
+        """Returns the combined list of default and user-defined categories."""
         with self.connect() as conn:
             rows = conn.execute("SELECT name FROM custom_categories ORDER BY name").fetchall()
             used_rows = conn.execute("SELECT DISTINCT category FROM item_catalog WHERE category != ''").fetchall()
@@ -124,7 +124,7 @@ class Database:
         return result
 
     def add_custom_category(self, name: str) -> list[str]:
-        """Добавляет новую пользовательскую категорию."""
+        """Adds a new user-defined category."""
         clean = name.strip()
         if not clean:
             return self.get_all_categories()
@@ -137,7 +137,7 @@ class Database:
         return self.get_all_categories()
 
     def get_existing_catalog_map(self, item_numbers: list[str]) -> dict[str, dict[str, Any]]:
-        """Возвращает уже существующие записи в item_catalog для заданных item_number."""
+        """Returns existing item_catalog rows for the given item numbers."""
         if not item_numbers:
             return {}
         placeholders = ",".join("?" for _ in item_numbers)
@@ -149,7 +149,7 @@ class Database:
         return {row["item_number"]: dict(row) for row in rows}
 
     def get_pending_items_for_gemini(self) -> list[dict[str, Any]]:
-        """Возвращает товары из item_catalog, которые ещё не были расшифрованы Gemini или вручную."""
+        """Returns item_catalog items that haven't been decoded by Gemini or by hand yet."""
         with self.connect() as conn:
             rows = conn.execute(
                 """
@@ -169,8 +169,8 @@ class Database:
 
     def save_categorized_items(self, items: list[dict[str, Any]], classified_by: str = "gemini") -> int:
         """
-        Сохраняет расшифрованные названия и категории в item_catalog.
-        Никогда не перезаписывает записи с is_manual_override = 1.
+        Saves decoded names and categories to item_catalog.
+        Never overwrites rows with is_manual_override = 1.
         """
         if not items:
             return 0
@@ -214,7 +214,7 @@ class Database:
         return updated
 
     def get_items_missing_images(self) -> list[dict[str, str]]:
-        """Товары, у которых известен URL картинки, но она ещё не скачана."""
+        """Items whose image URL is known but whose image hasn't been downloaded yet."""
         with self.connect() as conn:
             rows = conn.execute(
                 "SELECT item_number, image_url FROM item_catalog WHERE image_url != '' AND image_file = ''"
@@ -235,8 +235,8 @@ class Database:
         clean_name: str | None = None,
     ) -> dict[str, Any] | None:
         """
-        Обновляет категорию (и опционально расшифрованное название) вручную пользователем.
-        Устанавливает is_manual_override = 1.
+        Updates the category (and optionally the decoded name) as a manual user edit.
+        Sets is_manual_override = 1.
         """
         now = datetime.now(timezone.utc).isoformat()
         with self.connect() as conn:
@@ -275,8 +275,8 @@ class Database:
 
     def upsert_receipts(self, parsed_receipts: list[dict[str, Any]]) -> dict[str, Any]:
         """
-        Сохраняет нормализованные чеки и их позиции в БД.
-        Возвращает статистику добавленных чеков и список совершенно новых товаров (не встречавшихся ранее в item_catalog).
+        Saves normalized receipts and their line items to the database.
+        Returns receipt counts and the list of brand-new items (not previously in item_catalog).
         """
         now = datetime.now(timezone.utc).isoformat()
         inserted_receipts = 0
@@ -296,7 +296,7 @@ class Database:
                 ).fetchone()
 
                 if exists and receipt.get("is_partial"):
-                    # Детали не загрузились: оставляем ранее сохранённый чек с позициями как есть
+                    # Details didn't load: keep the previously stored receipt and its items as they are
                     skipped_receipts += 1
                     continue
 
@@ -448,7 +448,7 @@ class Database:
         receipt_type: str | None = None,
         store: str | None = None,
     ) -> dict[str, Any]:
-        """Рассчитывает полную статистику расходов по категориям и месяцам за выбранный период."""
+        """Computes full spending statistics by category and month for the selected period."""
         where_sql, params = self._build_receipt_filter(start_date, end_date, receipt_type, store)
 
         with self.connect() as conn:
@@ -563,7 +563,7 @@ class Database:
         search: str | None = None,
         store: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Возвращает агрегированный список товаров за период с их категориями и суммами."""
+        """Returns an aggregated list of items for the period with their categories and totals."""
         where_sql, params = self._build_receipt_filter(start_date, end_date, receipt_type, store)
         if category and category != "all":
             where_sql += " AND c.category = ? "
@@ -604,8 +604,8 @@ class Database:
 
     def search_purchases(self, query: str, limit: int = 500) -> list[dict[str, Any]]:
         """
-        Ищет покупки товара во всех магазинах за всё время: по номеру товара, названию
-        из чека и расшифрованному названию. Одна строка — одна позиция в чеке, новые сверху.
+        Searches item purchases across all stores and all time by item number, receipt
+        description, and decoded name. One row per receipt line, newest first.
         """
         q = f"%{query.strip().casefold()}%"
         with self.connect() as conn:
@@ -647,7 +647,7 @@ class Database:
         receipt_type: str | None = None,
         store: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Возвращает список чеков за период вместе с их позициями и категориями."""
+        """Returns receipts for the period with their line items and categories."""
         where_sql, params = self._build_receipt_filter(start_date, end_date, receipt_type, store)
         with self.connect() as conn:
             receipts = conn.execute(
@@ -711,9 +711,9 @@ class Database:
         exclude_alcohol: bool = True,
     ) -> dict[str, Any]:
         """
-        Рассчитывает аналитику выгодности карт Costco (Gold Star vs Executive 2% Reward) за год или выбранный период.
-        В базу 2% кэшбэка входят чистые суммы покупок (net_amount без налогов и после вычета купонов)
-        на складе (warehouse) и онлайн (online), исключая заправки (gas) и опционально категорию «Алкоголь».
+        Compares Costco memberships (Gold Star vs Executive 2% Reward) for a year or the selected period.
+        The 2% reward base is net purchase amounts (net_amount, excluding tax and after coupons)
+        in the warehouse and online, excluding fuel (gas) and, optionally, the "Алкоголь" (alcohol) category.
         """
         current_year = str(datetime.now().year)
         with self.connect() as conn:
@@ -761,7 +761,7 @@ class Database:
                 period_label = f"{selected_year} год"
 
             if resolved_mode != "filter":
-                # Карты Costco касаются только покупок в Costco
+                # Costco memberships only apply to Costco purchases
                 where_sql += " AND r.store = 'costco'"
 
             receipt_totals = conn.execute(

@@ -1,14 +1,14 @@
-"""Нормализатор чеков Costco (In-Warehouse, Gas Station и Online Orders)."""
+"""Normalizer for Costco receipts (In-Warehouse, Gas Station and Online Orders)."""
 import re
 from typing import Any
 
 
-# Ссылка купона на товар в чеке Costco: "TPD/1234567", "/1234567", "/ 1234567" или "#1234567".
-# Только в начале описания — иначе возврат вроде "KS TOWEL 12/120CT" принимается за купон.
+# A coupon's reference to its item on a Costco receipt: "TPD/1234567", "/1234567", "/ 1234567" or "#1234567".
+# Only at the start of the description; otherwise a return like "KS TOWEL 12/120CT" is taken for a coupon.
 DISCOUNT_REF_RE = re.compile(r"^(?:TPD/|/|#)\s*(\d{3,12})\b")
 GAS_KEYWORDS = {"UNLEADED", "REGULAR", "PREMIUM", "GASOLINE", "DIESEL", "FUEL"}
-# Отделы Costco с товарами на развес (мясо, деликатесы и сыры, рыба/сервисный деликатес) —
-# по реальным чекам: только в них сумма строки = вес × цена за фунт
+# Costco departments with sold-by-weight items (meat, deli and cheese, seafood/service deli).
+# Based on real receipts, only in these is the line amount = weight × price per pound
 WEIGHT_DEPARTMENTS = {19, 61, 63}
 
 
@@ -24,13 +24,13 @@ def _to_float(val: Any, default: float = 0.0) -> float:
 
 
 def _normalize_date(date_str: Any) -> str:
-    """Приводит строку даты к ISO-формату YYYY-MM-DDTHH:MM:SS или YYYY-MM-DD."""
+    """Converts a date string to ISO format YYYY-MM-DDTHH:MM:SS or YYYY-MM-DD."""
     if not date_str:
         return "1970-01-01"
     s = str(date_str).strip()
     if len(s) >= 10 and s[4] == "-" and s[7] == "-":
         return s
-    # Поддержка американского формата MM/DD/YYYY
+    # Support the US MM/DD/YYYY format
     m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})", s)
     if m:
         month, day, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
@@ -40,8 +40,8 @@ def _normalize_date(date_str: Any) -> str:
 
 def _is_discount_row(raw_item: dict[str, Any]) -> tuple[bool, str | None]:
     """
-    Определяет, является ли строка в itemArray купоном/скидкой (Instant Savings / TPD).
-    Возвращает (is_discount, target_item_number).
+    Determines whether an itemArray line is a coupon/discount (Instant Savings / TPD).
+    Returns (is_discount, target_item_number).
     """
     desc1 = str(raw_item.get("itemDescription01") or "").strip().upper()
     desc2 = str(raw_item.get("itemDescription02") or "").strip().upper()
@@ -68,8 +68,8 @@ def _is_discount_row(raw_item: dict[str, Any]) -> tuple[bool, str | None]:
 
 def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any] | None:
     """
-    Парсит чек из GraphQL-ответа Costco (getReceiptsWithCounts / receipts).
-    Автоматически определяет тип: 'warehouse' или 'gas', и привязывает купоны к товарам.
+    Parses a receipt from a Costco GraphQL response (getReceiptsWithCounts / receipts).
+    Detects the type ('warehouse' or 'gas') and attaches coupons to their items.
     """
     barcode = str(
         raw_receipt.get("transactionBarcode")
@@ -100,7 +100,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
     pending_discounts: list[tuple[str | None, float, dict[str, Any]]] = []
 
     for raw_item in raw_items:
-        # Если чек уже в нормализованном внутреннем формате
+        # The receipt is already in the normalized internal format
         if "gross_amount" in raw_item and "net_amount" in raw_item and "item_number" in raw_item:
             item_copy = dict(raw_item)
             normalized_items.append(item_copy)
@@ -111,7 +111,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
 
         if is_disc:
             discount_val = abs(amount)
-            # Если target_item_num не указан явно, привязываем к последней добавленной позиции
+            # If target_item_num isn't given, attach the coupon to the most recent item
             if not target_item_num and normalized_items:
                 target_item_num = normalized_items[-1]["item_number"]
             pending_discounts.append((target_item_num, discount_val, raw_item))
@@ -144,8 +144,8 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
             and abs(abs(amount) - unit_price) > 0.01
             and (is_fuel_line or raw_item.get("itemDepartmentNumber") in WEIGHT_DEPARTMENTS)
         ):
-            # Весовой товар (или топливо): в unit стоит 1, а цена указана за фунт/галлон.
-            # В других отделах такое расхождение — уценка, а не вес.
+            # Sold by weight (or fuel): unit is 1 and the price is per pound/gallon.
+            # In other departments this mismatch is a markdown, not a weight.
             qty = round(amount / unit_price, 3)
             sold_by_measure = True
 
@@ -158,7 +158,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
             "discount_amount": 0.0,
             "net_amount": round(amount, 2),
             "tax_flag": str(raw_item.get("taxFlag") or ""),
-            # Топливо продаётся в галлонах, а не в фунтах
+            # Fuel is sold in gallons, not pounds
             "is_weight": sold_by_measure and not is_fuel_line,
         }
         if is_gas:
@@ -167,7 +167,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
 
         normalized_items.append(item_entry)
 
-    # Применяем скидки к соответствующим товарам
+    # Apply discounts to their items
     total_discounts_applied = 0.0
     for target_num, disc_val, raw_item in pending_discounts:
         target = None
@@ -181,8 +181,8 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
             target["net_amount"] = round(target["gross_amount"] - target["discount_amount"], 2)
             total_discounts_applied = round(total_discounts_applied + disc_val, 2)
             continue
-        # Купон не нашёл свой товар: не вешаем его на случайную позицию,
-        # а сохраняем отдельной отрицательной строкой (это может быть и возврат)
+        # The coupon's item isn't on the receipt: don't attach it to an arbitrary item,
+        # keep it as a separate negative line (it may also be a return)
         item_number = str(raw_item.get("itemNumber") or "").strip() or f"DISCOUNT-{target_num or 'UNKNOWN'}"
         desc = str(raw_item.get("itemDescription01") or "").strip() or f"DISCOUNT #{item_number}"
         amount = -disc_val
@@ -233,7 +233,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
 
 
 def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
-    """Парсит онлайн-заказ Costco.com (getOnlineOrders / bcOrders) в единый формат чека."""
+    """Parses a Costco.com online order (getOnlineOrders / bcOrders) into the common receipt format."""
     order_num = str(
         raw_order.get("orderNumber")
         or raw_order.get("orderHeaderId")
@@ -252,7 +252,7 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
 
     line_items = raw_order.get("orderLineItems") or raw_order.get("lineItems") or raw_order.get("items") or []
     if not line_items:
-        # Ответ getOrderDetails: позиции сгруппированы по адресам доставки
+        # getOrderDetails response: lines are grouped by shipping address
         line_items = [
             line
             for ship_to in raw_order.get("orderShipTos") or []
@@ -265,7 +265,7 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
 
     for idx, line in enumerate(line_items, start=1):
         if line.get("isFeeItem"):
-            # Сборы (доставка, утилизация и т.п.) — не товары: не классифицируем и не считаем в категориях
+            # Fees (delivery, disposal, etc.) aren't merchandise: don't classify them or count them in categories
             fees = round(fees + _to_float(line.get("merchandiseTotal") or line.get("unitPrice"), 0.0), 2)
             continue
         item_num =str(line.get("itemNumber") or line.get("item_number") or f"ONL-{idx}").strip()
@@ -302,8 +302,8 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
             }
         )
 
-    # getOrderDetails отдаёт скидку только на уровне заказа — раскладываем её по позициям
-    # пропорционально сумме, чтобы статистика категорий видела реально оплаченное
+    # getOrderDetails only returns the discount at the order level; spread it across items
+    # in proportion to their amounts so category stats reflect what was actually paid
     order_discount = abs(_to_float(raw_order.get("discountAmount"), 0.0))
     unallocated = round(order_discount - total_discount, 2)
     gross_sum = sum(i["gross_amount"] for i in normalized_items if i["gross_amount"] > 0)
@@ -311,7 +311,7 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
         allocatable = [i for i in normalized_items if i["gross_amount"] > 0]
         remaining = unallocated
         for n, item in enumerate(allocatable, start=1):
-            # Последней позиции — остаток, чтобы копейки от округления не терялись
+            # The last item gets the remainder so rounding cents aren't lost
             share = remaining if n == len(allocatable) else round(unallocated * item["gross_amount"] / gross_sum, 2)
             remaining = round(remaining - share, 2)
             item["discount_amount"] = round(item["discount_amount"] + share, 2)
@@ -348,9 +348,9 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
 
 def parse_any_costco_payload(payload: Any) -> list[dict[str, Any]]:
     """
-    Универсальный парсер: принимает любой JSON-ответ от Costco GraphQL API
-    (getReceiptsWithCounts, getOnlineOrders или массив чеков/заказов) и возвращает
-    список нормализованных чеков.
+    Generic parser: takes any JSON response from the Costco GraphQL API
+    (getReceiptsWithCounts, getOnlineOrders, or an array of receipts/orders) and returns
+    a list of normalized receipts.
     """
     results: list[dict[str, Any]] = []
 
@@ -374,7 +374,7 @@ def parse_any_costco_payload(payload: Any) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         return results
 
-    # Развёртывание вложенного ответа GraphQL {"data": ...}
+    # Unwrap a nested GraphQL response {"data": ...}
     data_node = payload.get("data") if isinstance(payload.get("data"), dict) else payload
 
     # 1. In-Warehouse & Gas receipts (receiptsWithCounts / receipts)
@@ -411,7 +411,7 @@ def parse_any_costco_payload(payload: Any) -> list[dict[str, Any]]:
             if parsed:
                 results.append(parsed)
 
-    # 3. Одиночный чек или онлайн-заказ
+    # 3. A single receipt or online order
     if not results:
         if "orderNumber" in data_node or "orderLineItems" in data_node:
             parsed = parse_online_order(data_node)

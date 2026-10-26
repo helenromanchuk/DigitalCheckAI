@@ -1,6 +1,6 @@
-// DigitalCheckAI: выгрузка чеков Costco (склад, заправки, онлайн-заказы) в файл costco-receipts.json.
-// Запускать в консоли браузера (F12 → Console) на www.costco.com после входа в аккаунт,
-// на странице Account → Orders & Purchases. Глубину истории можно изменить в YEARS_BACK.
+// DigitalCheckAI: exports Costco receipts (warehouse, gas, online orders) to costco-receipts.json.
+// Run it in the browser console (F12 → Console) on www.costco.com after signing in,
+// on the Account → Orders & Purchases page. Change YEARS_BACK to adjust how far back it goes.
 (async () => {
   const YEARS_BACK = 3;
   const URL_GQL = "https://ecom-api.costco.com/ebusiness/order/v1/orders/graphql";
@@ -11,7 +11,7 @@
     return;
   }
 
-  // Запросы идут через XMLHttpRequest: защита Kasada на странице сама добавляет к ним свои заголовки
+  // Requests go through XMLHttpRequest so the page's Kasada protection adds its own headers to them
   const gql = (query, variables) => new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", URL_GQL);
@@ -57,7 +57,7 @@
   const fmtReceipt = d => `${d.getMonth() + 1}/${pad(d.getDate())}/${d.getFullYear()}`;
   const fmtOnline = d => `${d.getFullYear()}-${d.getMonth() + 1}-${pad(d.getDate())}`;
 
-  // Период режется на куски по 180 дней
+  // The period is split into 180-day chunks
   const chunks = [];
   const end = new Date();
   let cur = new Date();

@@ -1,13 +1,13 @@
-"""Цена за фунт и за унцию по весу упаковки из названия товара или по весу развесного товара."""
+"""Price per pound and per ounce from the package weight in the item name or the weight of a sold-by-weight item."""
 import re
 from typing import Any
 
 OZ_PER_LB = 16.0
 
 _NUM = r"(\d+(?:\.\d+)?)"
-# "12 x 16 oz", "2 X 3LB" — упаковка из нескольких штук
+# "12 x 16 oz", "2 X 3LB": a multi-pack
 _MULTI_RE = re.compile(rf"(?<![\d.]){_NUM}\s*[x×]\s*{_NUM}\s*(lbs?|pounds?|oz|ounces?)\b", re.IGNORECASE)
-# "5 lb", "5LB.", "2OZ", "15.9 oz"; "fl oz" — это объём, его вырезаем заранее
+# "5 lb", "5LB.", "2OZ", "15.9 oz"; "fl oz" is volume, so it is stripped beforehand
 _LB_RE = re.compile(rf"(?<![\d.]){_NUM}\s*(?:lbs?|pounds?)\b", re.IGNORECASE)
 _OZ_RE = re.compile(rf"(?<![\d.]){_NUM}\s*(?:oz|ounces?)\b", re.IGNORECASE)
 _FL_OZ_RE = re.compile(rf"{_NUM}\s*fl\.?\s*oz\b", re.IGNORECASE)
@@ -18,7 +18,7 @@ def _to_lb(value: float, unit: str) -> float:
 
 
 def package_weight_lb(text: str | None) -> float | None:
-    """Вес одной упаковки в фунтах по тексту названия; None, если веса в названии нет."""
+    """Weight of one package in pounds from the name text; None if the name has no weight."""
     if not text:
         return None
     clean = _FL_OZ_RE.sub(" ", text)
@@ -47,7 +47,7 @@ def total_weight_lb(
     quantity: float,
     is_weight: bool,
 ) -> float | None:
-    """Общий вес покупки в фунтах: для развесного товара это количество, иначе вес упаковки × количество."""
+    """Total purchase weight in pounds: the quantity for sold-by-weight items, otherwise package weight × quantity."""
     if is_weight:
         return quantity if quantity and quantity > 0 else None
     per_package = package_weight_lb(clean_name) or package_weight_lb(raw_description)
@@ -57,7 +57,7 @@ def total_weight_lb(
 
 
 def add_unit_prices(row: dict[str, Any], amount_key: str, quantity_key: str) -> dict[str, Any]:
-    """Добавляет в строку price_per_lb и price_per_oz (по сумме со скидкой) или None."""
+    """Adds price_per_lb and price_per_oz (based on the discounted amount), or None, to the row."""
     weight = total_weight_lb(
         row.get("clean_name"),
         row.get("raw_description"),

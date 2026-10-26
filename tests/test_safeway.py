@@ -1,4 +1,4 @@
-"""Тесты парсинга чеков Safeway и разделения статистики по магазинам."""
+"""Tests for Safeway receipt parsing and per-store statistics."""
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -8,8 +8,8 @@ from app.database import Database
 from app.main import app
 from app.scraper.safeway_client import parse_safeway_receipt
 
-# Сокращённая структура ответа /order-account/api/instore (детали чека).
-# Сумма позиций (10.48) на 0.50 больше итога: скидка на весь чек, не привязанная к позициям.
+# Trimmed /order-account/api/instore response (receipt details).
+# The line sum (10.48) is 0.50 more than the total: a receipt-wide discount not tied to any line.
 SAMPLE_SAFEWAY_RECEIPT = {
     "posDateTime": "2026-10-20T16:02:40",
     "barCode": "12345678901234567890123",
@@ -65,11 +65,11 @@ def test_parse_safeway_receipt_allocates_basket_discount():
     assert items["SWY-7016295873"]["raw_description"] == "Item name not found (BAKED GOODS)"
     assert items["SWY-7016295873"]["quantity"] == 1.5
 
-    # Картинка есть только у товара с номером bpn
+    # Only the item with a bpn has an image
     assert items["SWY-6927607035"]["image_url"].startswith("https://images.albertsons-media.com/is/image/ABS/960211847")
     assert "image_url" not in items["SWY-7016295873"]
 
-    # Нераспределённые 0.50 разнесены по позициям, сумма сходится с итогом чека
+    # The unallocated 0.50 is spread across lines, and the sum matches the receipt total
     assert round(sum(i["net_amount"] for i in r["items"]), 2) == 9.98
     assert round(sum(i["discount_amount"] for i in r["items"]), 2) == 3.51
 
@@ -108,7 +108,7 @@ def test_store_filter_separates_costco_and_safeway(tmp_path: Path, monkeypatch):
     receipts = client.get("/api/receipts?store=safeway").json()["receipts"]
     assert [r["store"] for r in receipts] == ["safeway"]
 
-    # URL картинки попал в справочник и ждёт скачивания
+    # The image URL is in the catalog, waiting to be downloaded
     missing = test_db.get_items_missing_images()
     assert [m["item_number"] for m in missing] == ["SWY-6927607035"]
     test_db.set_item_image_file("SWY-6927607035", "SWY-6927607035.jpg")
@@ -116,7 +116,7 @@ def test_store_filter_separates_costco_and_safeway(tmp_path: Path, monkeypatch):
     items = client.get("/api/items?store=safeway").json()["items"]
     assert {i["item_number"]: i["image_file"] for i in items}["SWY-6927607035"] == "SWY-6927607035.jpg"
 
-    # Аналитика карт Costco не учитывает покупки в Safeway
+    # Costco membership analytics ignore Safeway purchases
     mb = client.get("/api/membership-analytics?year=2026&exclude_alcohol=false").json()
     assert mb["spend_breakdown"]["receipt_count"] == 1
     assert mb["spend_breakdown"]["eligible_spend"] == 20.0
@@ -149,12 +149,12 @@ def test_search_purchases_across_stores(tmp_path: Path, monkeypatch):
     res = client.get("/api/search?q=mango")
     assert res.status_code == 200
     rows = res.json()["results"]
-    # Новые покупки сверху, оба магазина
+    # Newest purchases first, both stores
     assert [(r["store"], r["purchase_date"]) for r in rows] == [("safeway", "2026-10-20"), ("costco", "2026-09-01")]
     costco_row = rows[1]
     assert (costco_row["quantity"], costco_row["gross_amount"], costco_row["net_amount"]) == (2.0, 10.0, 9.0)
 
-    # Поиск по русскому названию без учёта регистра
+    # Case-insensitive search by Russian name
     rows_ru = client.get("/api/search?q=ЧАТНИ").json()["results"]
     assert [r["item_number"] for r in rows_ru] == ["555"]
 

@@ -1,1 +1,1 @@
-"""REST API пакет DigitalCheckAI."""
+"""DigitalCheckAI REST API package."""

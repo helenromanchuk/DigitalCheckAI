@@ -1,1 +1,1 @@
-"""Модуль выгрузки и парсинга чеков Costco.com."""
+"""Downloading and parsing of Costco.com receipts."""

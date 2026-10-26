@@ -1,4 +1,4 @@
-"""Тесты расчёта цены за фунт и за унцию."""
+"""Tests for price per pound and per ounce."""
 import pytest
 
 from app.scraper.parser import parse_any_costco_payload
@@ -30,7 +30,7 @@ def test_unit_prices_use_clean_name_then_receipt_text():
         "net_amount",
         "quantity",
     )
-    # 2 пакета по 5 lb за $15.78 → $1.578/lb
+    # 2 bags of 5 lb for $15.78 → $1.578/lb
     assert row["price_per_lb"] == 1.578
     assert row["price_per_oz"] == round(15.78 / 160, 4)
 
@@ -68,7 +68,7 @@ def test_parser_marks_weight_items_but_not_fuel():
         "itemArray": [
             {"itemNumber": "21647", "itemDescription01": "PORK TENDER", "unit": 1, "amount": 18.92, "itemUnitPriceAmount": 3.49, "itemDepartmentNumber": 61},
             {"itemNumber": "1", "itemDescription01": "MILK", "unit": 1, "amount": 5.0, "itemUnitPriceAmount": 5.0},
-            # Уценка в садовом отделе: продан за $90 при цене $149.99 — это не вес
+            # Markdown in the garden department: sold for $90 at a $149.99 price, not a weight
             {"itemNumber": "1759323", "itemDescription01": "PLANTER", "unit": 1, "amount": 90, "itemUnitPriceAmount": 149.99,
              "itemDepartmentNumber": 27},
         ],

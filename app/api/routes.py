@@ -1,4 +1,4 @@
-"""Маршруты FastAPI для синхронизации с Costco.com, категоризации и аналитики расходов."""
+"""FastAPI routes for Costco.com sync, categorization, and spending analytics."""
 import asyncio
 from datetime import date, timedelta
 import json
@@ -47,7 +47,7 @@ class SetGeminiKeyRequest(BaseModel):
 
 @router.get("/config")
 def get_app_config(db: Database = Depends(get_db)) -> dict[str, Any]:
-    """Возвращает статус ключа Gemini API, модель и список всех доступных категорий."""
+    """Returns the Gemini API key status, the model, and all available categories."""
     key = get_gemini_api_key()
     has_key = bool(key and key != "your_gemini_api_key_here")
     pending = db.get_pending_items_for_gemini()
@@ -64,7 +64,7 @@ def update_gemini_key(
     payload: SetGeminiKeyRequest,
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
-    """Сохраняет GEMINI_API_KEY в .env и автоматически классифицирует ожидающие товары."""
+    """Saves GEMINI_API_KEY to .env and classifies pending items."""
     save_gemini_api_key(payload.api_key)
     pending = db.get_pending_items_for_gemini()
     classifier = GeminiItemClassifier(db)
@@ -81,7 +81,7 @@ def create_custom_category(
     payload: AddCategoryRequest,
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
-    """Добавляет новую пользовательскую категорию в список."""
+    """Adds a new user-defined category."""
     categories = db.add_custom_category(payload.name)
     return {"categories": categories}
 
@@ -92,9 +92,9 @@ async def sync_from_costco(
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
     """
-    Открывает браузер (Playwright), подключается к costco.com, скачивает все чеки
-    (In-Warehouse, Gas Station, Online Orders) за выбранный период и отправляет
-    только новые Item # в Gemini API.
+    Opens a browser (Playwright), connects to costco.com, downloads all receipts
+    (In-Warehouse, Gas Station, Online Orders) for the selected period, and sends
+    only new Item #s to the Gemini API.
     """
     client = CostcoClient()
     try:
@@ -108,7 +108,7 @@ async def sync_from_costco(
 
     upsert_info = db.upsert_receipts(parsed_receipts)
     classifier = GeminiItemClassifier(db)
-    # Синхронный вызов Gemini в отдельном потоке, чтобы не блокировать event loop сервера
+    # Run the synchronous Gemini call in a separate thread so it doesn't block the server's event loop
     cls_info = await asyncio.to_thread(classifier.classify_new_items, upsert_info["new_items"])
 
     return {
@@ -127,8 +127,8 @@ async def sync_from_safeway(
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
     """
-    Открывает браузер (Playwright) на safeway.com, ждёт входа пользователя, скачивает чеки
-    из магазинов Safeway за выбранный период и отправляет новые товары в Gemini API.
+    Opens a browser (Playwright) on safeway.com, waits for the user to sign in, downloads
+    Safeway in-store receipts for the selected period, and sends new items to the Gemini API.
     """
     client = SafewayClient()
     try:
@@ -161,7 +161,7 @@ async def import_receipts_json(
     file: UploadFile = File(...),
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
-    """Импортирует JSON-файл с чеками Costco или Safeway (формат определяется автоматически)."""
+    """Imports a JSON file with Costco or Safeway receipts (the format is detected automatically)."""
     try:
         raw_bytes = await file.read()
         data = json.loads(raw_bytes.decode("utf-8-sig"))
@@ -198,7 +198,7 @@ async def import_receipts_json(
 
 @router.post("/reclassify-pending")
 def reclassify_pending_items(db: Database = Depends(get_db)) -> dict[str, Any]:
-    """Отправляет все не переопределённые вручную товары (где ещё не работал Gemini) в Gemini API."""
+    """Sends every item that has no manual override and hasn't been classified by Gemini yet to the Gemini API."""
     pending = db.get_pending_items_for_gemini()
     classifier = GeminiItemClassifier(db)
     cls_info = classifier.classify_new_items(pending)
@@ -217,7 +217,7 @@ def get_statistics(
     store: str | None = Query(default="all"),
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
-    """Возвращает статистику расходов по категориям и месяцам за выбранный период."""
+    """Returns spending statistics by category and month for the selected period."""
     return db.get_statistics(start_date=start_date, end_date=end_date, receipt_type=receipt_type, store=store)
 
 
@@ -231,7 +231,7 @@ def get_items(
     store: str | None = Query(default="all"),
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
-    """Возвращает агрегированный список товаров за период с их категориями и суммами."""
+    """Returns an aggregated list of items for the period with their categories and totals."""
     items = db.get_items_summary(
         start_date=start_date,
         end_date=end_date,
@@ -249,7 +249,7 @@ def update_item_category(
     payload: UpdateItemCategoryRequest,
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
-    """Позволяет пользователю вручную изменить категорию (и/или название) для заданного Item #."""
+    """Lets the user manually change the category (and/or name) of the given Item #."""
     updated = db.update_item_category_manual(
         item_number=item_number,
         category=payload.category,
@@ -268,7 +268,7 @@ def get_receipts(
     store: str | None = Query(default="all"),
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
-    """Возвращает список чеков и онлайн-заказов за выбранный период с детализацией позиций."""
+    """Returns receipts and online orders for the selected period with their line items."""
     receipts = db.get_receipts_list(
         start_date=start_date,
         end_date=end_date,
@@ -283,7 +283,7 @@ def search_purchases(
     q: str = Query(..., min_length=2),
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
-    """Ищет покупки товара по всем магазинам и за всё время."""
+    """Searches item purchases across all stores and all time."""
     results = db.search_purchases(q)
     return {"query": q, "results": results}
 
@@ -300,7 +300,7 @@ def get_membership_analytics(
     exclude_alcohol: bool = Query(default=True),
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
-    """Рассчитывает аналитику выгодности карт Costco (Gold Star vs Executive 2% Reward) за год или период."""
+    """Compares Costco memberships (Gold Star vs Executive 2% Reward) for a year or period."""
     return db.get_membership_analytics(
         year=year,
         start_date=start_date,
