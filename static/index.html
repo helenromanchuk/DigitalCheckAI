@@ -20,7 +20,7 @@
 </head>
 <body class="text-slate-800 min-h-screen flex flex-col">
 
-  <!-- Шапка -->
+  <!-- Header -->
   <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
     <div class="max-w-screen-2xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
       <div class="flex items-center gap-3">
@@ -31,42 +31,48 @@
           <h1 class="text-xl font-bold tracking-tight text-slate-900">
             Digital<span class="brand-blue">Check</span><span class="brand-red">AI</span>
           </h1>
-          <p class="text-xs text-slate-500">Аналитика чеков Costco и Safeway • ИИ-расшифровка товаров через Gemini</p>
+          <p class="text-xs text-slate-500" data-i18n="header.subtitle">Аналитика чеков Costco и Safeway • ИИ-расшифровка товаров через Gemini</p>
         </div>
       </div>
 
       <div class="flex flex-wrap items-center gap-2">
-        <!-- Статус Gemini API -->
+        <!-- Interface language -->
+        <div class="inline-flex rounded-lg border border-slate-300 overflow-hidden text-xs" data-i18n-title="header.langTitle" title="Язык интерфейса">
+          <button data-lang="ru" onclick="setLanguage('ru')" class="px-2 py-1 font-medium bg-white text-slate-600 hover:bg-slate-50">RU</button>
+          <button data-lang="en" onclick="setLanguage('en')" class="px-2 py-1 font-medium bg-white text-slate-600 hover:bg-slate-50">EN</button>
+        </div>
+
+        <!-- Gemini API status -->
         <button id="btnGeminiConfig" onclick="openGeminiModal()"
           class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-200 bg-slate-50 hover:bg-slate-100 transition">
           <span id="geminiStatusDot" class="w-2 h-2 rounded-full bg-amber-400"></span>
           <span id="geminiStatusText">Gemini API</span>
         </button>
 
-        <!-- Импорт JSON -->
+        <!-- JSON import -->
         <label class="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 transition">
-          <span>📂 Импорт JSON</span>
+          <span data-i18n="header.import">📂 Импорт JSON</span>
           <input type="file" id="jsonFileInput" accept=".json" class="hidden" onchange="importJsonFile(event)" />
         </label>
-        <button onclick="openImportHelp()" title="Как получить JSON с чеками"
+        <button onclick="openImportHelp()" data-i18n-title="header.importHelpTitle" title="Как получить JSON с чеками"
           class="w-7 h-7 rounded-full text-xs font-bold border border-slate-300 bg-white hover:bg-slate-50 text-slate-600">?</button>
 
-        <!-- Синхронизация с Costco.com -->
+        <!-- Costco.com sync -->
         <button id="btnSync" onclick="syncWithCostco()"
           class="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold text-white bg-brand-blue hover:bg-blue-800 shadow-sm transition">
-          <span>🔄 Скачать с Costco.com</span>
+          <span data-i18n="header.syncCostco">🔄 Скачать с Costco.com</span>
         </button>
 
-        <!-- Синхронизация с Safeway.com -->
+        <!-- Safeway.com sync -->
         <button id="btnSyncSafeway" onclick="syncWithSafeway()"
           class="hidden inline-flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold text-white bg-safeway-red hover:opacity-90 shadow-sm transition">
-          <span>🔄 Скачать с Safeway.com</span>
+          <span data-i18n="header.syncSafeway">🔄 Скачать с Safeway.com</span>
         </button>
       </div>
     </div>
   </header>
 
-  <!-- Уведомление / Статус операции -->
+  <!-- Notification / operation status -->
   <div id="statusBanner" class="hidden max-w-screen-2xl mx-auto w-full px-4 sm:px-6 mt-4">
     <div id="statusBannerInner" class="rounded-xl px-4 py-3 text-sm flex items-center justify-between border">
       <span id="statusBannerText"></span>
@@ -74,10 +80,10 @@
     </div>
   </div>
 
-  <!-- Основной контент -->
+  <!-- Main content -->
   <main class="max-w-screen-2xl mx-auto w-full px-4 sm:px-6 py-6 space-y-6 flex-1">
 
-    <!-- Вкладки магазинов -->
+    <!-- Store tabs -->
     <nav class="flex gap-6 border-b border-slate-200">
       <button id="storeTab-costco" onclick="setStore('costco')"
         class="store-tab pb-2.5 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800">
@@ -89,23 +95,23 @@
       </button>
       <button id="storeTab-all" onclick="setStore('all')"
         class="store-tab pb-2.5 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800">
-        Все магазины
+        <span data-i18n="tabs.all">Все магазины</span>
       </button>
       <button id="storeTab-search" onclick="setStore('search')"
         class="store-tab pb-2.5 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800">
-        🔍 Поиск
+        <span data-i18n="tabs.search">🔍 Поиск</span>
       </button>
     </nav>
 
-    <!-- Поиск покупок по всем магазинам -->
+    <!-- Purchase search across all stores -->
     <section id="searchView" class="hidden bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 class="text-base font-bold text-slate-900">Поиск покупок</h2>
-          <p class="text-xs text-slate-500">По всем магазинам и за всё время: название из чека, расшифровка или Item #</p>
+          <h2 class="text-base font-bold text-slate-900" data-i18n="search.title">Поиск покупок</h2>
+          <p class="text-xs text-slate-500" data-i18n="search.subtitle">По всем магазинам и за всё время: название из чека, расшифровка или Item #</p>
         </div>
         <input type="search" id="purchaseSearchInput" oninput="schedulePurchaseSearch()"
-          placeholder="Например: avocado, молоко, 1268246..."
+          data-i18n-placeholder="search.placeholder" placeholder="Например: avocado, молоко, 1268246..."
           class="border border-slate-300 rounded-lg px-3 py-2 text-sm w-full sm:w-80 focus:outline-none focus:ring-2 focus:ring-blue-500" />
       </div>
       <div id="searchSummary" class="text-xs text-slate-500"></div>
@@ -113,18 +119,18 @@
         <table class="w-full text-xs">
           <thead class="bg-slate-50 text-slate-500 uppercase tracking-wider">
             <tr>
-              <th class="text-left px-3 py-2.5 rounded-l-lg">Дата</th>
-              <th class="text-left px-3 py-2.5">Магазин</th>
-              <th class="text-left px-3 py-2.5">Товар</th>
-              <th class="text-right px-3 py-2.5">Кол-во</th>
-              <th class="text-right px-3 py-2.5">До скидки</th>
-              <th class="text-right px-3 py-2.5">Со скидкой</th>
-              <th class="text-right px-3 py-2.5" title="Цена со скидкой за фунт: по весу из названия или по весу развесного товара">$/lb</th>
-              <th class="text-right px-3 py-2.5 rounded-r-lg" title="Цена со скидкой за унцию веса (не fl oz)">$/oz</th>
+              <th class="text-left px-3 py-2.5 rounded-l-lg" data-i18n="col.date">Дата</th>
+              <th class="text-left px-3 py-2.5" data-i18n="col.store">Магазин</th>
+              <th class="text-left px-3 py-2.5" data-i18n="col.item">Товар</th>
+              <th class="text-right px-3 py-2.5" data-i18n="col.qty">Кол-во</th>
+              <th class="text-right px-3 py-2.5" data-i18n="col.gross">До скидки</th>
+              <th class="text-right px-3 py-2.5" data-i18n="col.net">Со скидкой</th>
+              <th class="text-right px-3 py-2.5" data-i18n-title="col.lbTitleSearch" title="Цена со скидкой за фунт: по весу из названия или по весу развесного товара">$/lb</th>
+              <th class="text-right px-3 py-2.5 rounded-r-lg" data-i18n-title="col.ozTitle" title="Цена со скидкой за унцию веса (не fl oz)">$/oz</th>
             </tr>
           </thead>
           <tbody id="searchResultsBody" class="divide-y divide-slate-100">
-            <tr><td colspan="8" class="py-8 text-center text-slate-400">Введите хотя бы 2 символа.</td></tr>
+            <tr><td colspan="8" class="py-8 text-center text-slate-400" data-i18n="search.minChars">Введите хотя бы 2 символа.</td></tr>
           </tbody>
         </table>
       </div>
@@ -132,15 +138,15 @@
 
     <div id="dashboardView" class="space-y-6">
 
-    <!-- Панель фильтров периода и типов покупок -->
+    <!-- Period and purchase type filters -->
     <section class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex flex-wrap items-center justify-between gap-4">
       <div class="flex flex-wrap items-center gap-2">
-        <span class="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-1">Период:</span>
-        <button onclick="setPresetDays(30)" class="preset-btn px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700">30 дней</button>
-        <button onclick="setPresetDays(90)" class="preset-btn px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700">90 дней</button>
-        <button onclick="setPresetDays(180)" class="preset-btn px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700">Полгода</button>
-        <button onclick="setPresetYear()" class="preset-btn px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700">Этот год</button>
-        <button onclick="setPresetAll()" class="preset-btn px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700">Всё время</button>
+        <span class="text-xs font-semibold uppercase tracking-wider text-slate-400 mr-1" data-i18n="filters.period">Период:</span>
+        <button onclick="setPresetDays(30)" class="preset-btn px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700" data-i18n="filters.days30">30 дней</button>
+        <button onclick="setPresetDays(90)" class="preset-btn px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700" data-i18n="filters.days90">90 дней</button>
+        <button onclick="setPresetDays(180)" class="preset-btn px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700" data-i18n="filters.halfYear">Полгода</button>
+        <button onclick="setPresetYear()" class="preset-btn px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700" data-i18n="filters.thisYear">Этот год</button>
+        <button onclick="setPresetAll()" class="preset-btn px-2.5 py-1 rounded-md text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700" data-i18n="filters.allTime">Всё время</button>
 
         <div class="flex items-center gap-1.5 ml-2">
           <input type="date" id="startDate" onchange="refreshAll()"
@@ -152,73 +158,69 @@
       </div>
 
       <div id="receiptTypeFilterBox" class="flex items-center gap-2">
-        <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Тип покупок:</span>
+        <span class="text-xs font-semibold uppercase tracking-wider text-slate-400" data-i18n="filters.type">Тип покупок:</span>
         <select id="receiptTypeFilter" onchange="refreshAll()"
           class="border border-slate-300 rounded-lg px-3 py-1.5 text-xs font-medium bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-          <option value="all">Все покупки (Склад + Заправка + Онлайн)</option>
-          <option value="warehouse">🏪 Склад (In-Warehouse)</option>
-          <option value="gas">⛽ Заправка (Gas Station)</option>
-          <option value="online">📦 Онлайн-заказы (Costco.com)</option>
+          <option value="all" data-i18n="type.all">Все покупки (Склад + Заправка + Онлайн)</option>
+          <option value="warehouse" data-i18n="type.warehouse">🏪 Склад (In-Warehouse)</option>
+          <option value="gas" data-i18n="type.gas">⛽ Заправка (Gas Station)</option>
+          <option value="online" data-i18n="type.online">📦 Онлайн-заказы (Costco.com)</option>
         </select>
       </div>
     </section>
 
-    <!-- Карточки KPI -->
+    <!-- KPI cards -->
     <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
       <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-        <div class="text-xs font-medium text-slate-500">Всего потрачено (с налогом)</div>
+        <div class="text-xs font-medium text-slate-500" data-i18n="kpi.totalSpent">Всего потрачено (с налогом)</div>
         <div id="kpiTotalSpent" class="text-2xl font-extrabold text-slate-900 mt-1">$0.00</div>
         <div id="kpiSubtotalTax" class="text-xs text-slate-400 mt-1">Товары: $0.00 • Налог: $0.00</div>
       </div>
 
       <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-        <div class="text-xs font-medium text-slate-500">Сэкономлено (Instant Savings)</div>
+        <div class="text-xs font-medium text-slate-500" data-i18n="kpi.savings">Сэкономлено (Instant Savings)</div>
         <div id="kpiSavings" class="text-2xl font-extrabold text-emerald-600 mt-1">$0.00</div>
-        <div class="text-xs text-slate-400 mt-1">Купоны TPD вычтены из цены товаров</div>
+        <div class="text-xs text-slate-400 mt-1" data-i18n="kpi.savingsHint">Купоны TPD вычтены из цены товаров</div>
       </div>
 
       <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-        <div class="text-xs font-medium text-slate-500">Количество чеков / заказов</div>
+        <div class="text-xs font-medium text-slate-500" data-i18n="kpi.receiptCount">Количество чеков / заказов</div>
         <div id="kpiReceiptCount" class="text-2xl font-extrabold text-slate-900 mt-1">0</div>
-        <div id="kpiReceiptTypes" class="text-xs text-slate-400 mt-1">Склад: 0 • Заправка: 0 • Онлайн: 0</div>
+        <div id="kpiReceiptTypes" class="text-xs text-slate-400 mt-1" data-i18n="kpi.receiptTypesEmpty">Склад: 0 • Заправка: 0 • Онлайн: 0</div>
       </div>
 
       <div class="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-        <div class="text-xs font-medium text-slate-500">Средний чек за период</div>
+        <div class="text-xs font-medium text-slate-500" data-i18n="kpi.avgReceipt">Средний чек за период</div>
         <div id="kpiAvgReceipt" class="text-2xl font-extrabold text-blue-700 mt-1">$0.00</div>
-        <div id="kpiDateRange" class="text-xs text-slate-400 mt-1">Нет данных за период</div>
+        <div id="kpiDateRange" class="text-xs text-slate-400 mt-1" data-i18n="kpi.noDataPeriod">Нет данных за период</div>
       </div>
     </section>
 
-    <!-- Аналитика выгодности карт Costco (Gold Star vs Executive) -->
+    <!-- Costco membership comparison (Gold Star vs Executive) -->
     <section id="membershipSection" class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
         <div>
           <div class="flex items-center gap-2">
-            <h2 class="text-base font-bold text-slate-900">💳 Какая карта Costco выгоднее за год</h2>
-            <span id="cardVerdictBadge" class="px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-700">
-              Расчёт...
-            </span>
+            <h2 class="text-base font-bold text-slate-900" data-i18n="membership.title">💳 Какая карта Costco выгоднее за год</h2>
+            <span id="cardVerdictBadge" class="px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-700" data-i18n="membership.calculating">Расчёт...</span>
           </div>
-          <p class="text-xs text-slate-500 mt-0.5">
-            Сравнение Gold Star и Executive (2% возврат со склада и Costco.com без учёта бензина и налогов)
-          </p>
+          <p class="text-xs text-slate-500 mt-0.5" data-i18n="membership.subtitle">Сравнение Gold Star и Executive (2% возврат со склада и Costco.com без учёта бензина и налогов)</p>
         </div>
 
         <div class="flex flex-wrap items-center gap-3 text-xs">
           <div class="flex items-center gap-1.5">
-            <span class="text-slate-500 font-medium">Расчёт за:</span>
+            <span class="text-slate-500 font-medium" data-i18n="membership.periodFor">Расчёт за:</span>
             <select id="membershipYearSelect" onchange="loadMembershipAnalytics()"
               class="border border-slate-300 rounded-lg px-2.5 py-1 font-medium bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="auto">Этот год</option>
-              <option value="filter">Выбранный фильтр дат</option>
+              <option value="auto" data-i18n="membership.thisYear">Этот год</option>
+              <option value="filter" data-i18n="membership.dateFilter">Выбранный фильтр дат</option>
             </select>
           </div>
 
           <label class="inline-flex items-center gap-1.5 cursor-pointer select-none text-slate-600">
             <input type="checkbox" id="excludeAlcoholCheckbox" checked onchange="loadMembershipAnalytics()"
               class="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
-            <span>Исключать алкоголь</span>
+            <span data-i18n="membership.excludeAlcohol">Исключать алкоголь</span>
           </label>
 
           <div class="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1">
@@ -233,92 +235,90 @@
         </div>
       </div>
 
-      <!-- Сравнение двух карт и детализация базы 2% кэшбэка -->
+      <!-- Side-by-side memberships and the 2% reward base breakdown -->
       <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
-        <!-- Карта Gold Star -->
+        <!-- Gold Star membership -->
         <div id="goldCardBox" class="lg:col-span-4 rounded-xl border-2 border-slate-200 p-4 flex flex-col justify-between transition">
           <div>
             <div class="flex items-center justify-between">
               <span class="text-xs font-bold uppercase tracking-wider text-amber-600">Gold Star Membership</span>
-              <span id="goldWinnerTag" class="hidden px-2 py-0.5 rounded text-[11px] font-bold bg-amber-100 text-amber-800">Выгоднее сейчас</span>
+              <span id="goldWinnerTag" class="hidden px-2 py-0.5 rounded text-[11px] font-bold bg-amber-100 text-amber-800" data-i18n="card.winnerGold">Выгоднее сейчас</span>
             </div>
             <div class="mt-2 flex items-baseline justify-between">
-              <span class="text-xs text-slate-500">Годовая стоимость:</span>
+              <span class="text-xs text-slate-500" data-i18n="card.annualFee">Годовая стоимость:</span>
               <span id="goldFeeText" class="text-sm font-bold text-slate-800">$65.00 / год</span>
             </div>
             <div class="mt-1 flex items-baseline justify-between">
-              <span class="text-xs text-slate-500">Годовой кэшбэк (0%):</span>
+              <span class="text-xs text-slate-500" data-i18n="card.goldReward">Годовой кэшбэк (0%):</span>
               <span class="text-sm font-semibold text-slate-400">$0.00</span>
             </div>
           </div>
           <div class="mt-4 pt-3 border-t border-slate-100 flex items-baseline justify-between">
-            <span class="text-xs font-medium text-slate-600">Чистый итог за год:</span>
+            <span class="text-xs font-medium text-slate-600" data-i18n="card.goldNet">Чистый итог за год:</span>
             <span id="goldNetText" class="text-lg font-extrabold text-slate-900">-$65.00</span>
           </div>
         </div>
 
-        <!-- Карта Executive -->
+        <!-- Executive membership -->
         <div id="execCardBox" class="lg:col-span-4 rounded-xl border-2 border-slate-200 p-4 flex flex-col justify-between transition">
           <div>
             <div class="flex items-center justify-between">
               <span class="text-xs font-bold uppercase tracking-wider text-slate-900">Executive Membership (2%)</span>
-              <span id="execWinnerTag" class="hidden px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800">Окупается!</span>
+              <span id="execWinnerTag" class="hidden px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800" data-i18n="card.winnerExec">Окупается!</span>
             </div>
             <div class="mt-2 flex items-baseline justify-between">
-              <span class="text-xs text-slate-500">Годовая стоимость:</span>
+              <span class="text-xs text-slate-500" data-i18n="card.annualFee">Годовая стоимость:</span>
               <span id="execFeeText" class="text-sm font-bold text-slate-800">$130.00 / год</span>
             </div>
             <div class="mt-1 flex items-baseline justify-between">
-              <span class="text-xs text-slate-500">Накопленный возврат 2%:</span>
+              <span class="text-xs text-slate-500" data-i18n="card.execReward">Накопленный возврат 2%:</span>
               <span id="execRewardText" class="text-sm font-extrabold text-emerald-600">+$0.00</span>
             </div>
           </div>
           <div class="mt-4 pt-3 border-t border-slate-100 flex items-baseline justify-between">
-            <span class="text-xs font-medium text-slate-600">Чистый итог с учётом 2%:</span>
+            <span class="text-xs font-medium text-slate-600" data-i18n="card.execNet">Чистый итог с учётом 2%:</span>
             <span id="execNetText" class="text-lg font-extrabold text-slate-900">-$130.00</span>
           </div>
         </div>
 
-        <!-- Разбивка базы кэшбэка и годовой прогноз -->
+        <!-- Reward base breakdown and annual projection -->
         <div class="lg:col-span-4 rounded-xl bg-slate-50 border border-slate-200 p-4 flex flex-col justify-between text-xs space-y-2">
           <div class="font-bold text-slate-800 flex items-center justify-between">
-            <span>База расчёта 2% кэшбэка</span>
+            <span data-i18n="mb.title">База расчёта 2% кэшбэка</span>
             <span id="membershipPeriodLabel" class="text-slate-500 font-normal"></span>
           </div>
           <div class="space-y-1 text-slate-600">
             <div class="flex justify-between">
-              <span>Всего по чекам (с налогом):</span>
+              <span data-i18n="mb.total">Всего по чекам (с налогом):</span>
               <span id="mbTotalSpent" class="font-medium text-slate-800">$0.00</span>
             </div>
             <div class="flex justify-between">
-              <span>Минус заправки (Gas Station):</span>
+              <span data-i18n="mb.gas">Минус заправки (Gas Station):</span>
               <span id="mbExcludedGas" class="text-slate-500">-$0.00</span>
             </div>
             <div class="flex justify-between">
-              <span>Минус налоги (Tax):</span>
+              <span data-i18n="mb.tax">Минус налоги (Tax):</span>
               <span id="mbExcludedTax" class="text-slate-500">-$0.00</span>
             </div>
             <div id="mbAlcoholRow" class="flex justify-between">
-              <span>Минус алкоголь:</span>
+              <span data-i18n="mb.alcohol">Минус алкоголь:</span>
               <span id="mbExcludedAlcohol" class="text-slate-500">-$0.00</span>
             </div>
             <div class="pt-1 border-t border-slate-200 flex justify-between font-bold text-slate-900">
-              <span>Квалифицируемые покупки:</span>
+              <span data-i18n="mb.eligible">Квалифицируемые покупки:</span>
               <span id="mbEligibleSpend" class="text-blue-700">$0.00</span>
             </div>
           </div>
           <div id="mbProjectionBox" class="pt-2 border-t border-slate-200 text-[11px] text-slate-500">
-            Прогноз на 12 мес.: <b id="mbProjectedSpend" class="text-slate-700">$0.00</b> → возврат <b id="mbProjectedReward" class="text-emerald-600">$0.00</b>
+            <span data-i18n="mb.projection">Прогноз на 12 мес.:</span> <b id="mbProjectedSpend" class="text-slate-700">$0.00</b> <span data-i18n="mb.projectionReward">→ возврат</span> <b id="mbProjectedReward" class="text-emerald-600">$0.00</b>
           </div>
         </div>
       </div>
 
-      <!-- Прогресс-бар точки безубыточности апгрейда ($3,250) -->
+      <!-- Upgrade break-even progress bar ($3,250) -->
       <div class="bg-slate-50 rounded-xl p-3.5 border border-slate-200 space-y-2">
         <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
-          <span id="breakevenSummaryText" class="font-medium text-slate-700">
-            Точка окупаемости апгрейда до Executive (+$65): <b>$3,250.00</b> квалифицируемых покупок в год
-          </span>
+          <span id="breakevenSummaryText" class="font-medium text-slate-700" data-i18n-html="breakeven.initial">Точка окупаемости апгрейда до Executive (+$65): <b>$3,250.00</b> квалифицируемых покупок в год</span>
           <span id="breakevenProgressLabel" class="font-bold text-blue-700">0% ($0.00 / $3,250.00)</span>
         </div>
         <div class="w-full h-2.5 bg-slate-200 rounded-full overflow-hidden">
@@ -327,19 +327,17 @@
       </div>
     </section>
 
-    <!-- Графики и таблица категорий -->
+    <!-- Charts and category table -->
     <section class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-      <!-- Круговая диаграмма + сводка по категориям -->
+      <!-- Pie chart + category summary -->
       <div class="lg:col-span-7 bg-white rounded-2xl border border-slate-200 p-5 shadow-sm flex flex-col">
         <div class="flex items-center justify-between mb-4">
           <div>
-            <h2 class="text-base font-bold text-slate-900">Расходы по категориям (чистая стоимость товаров)</h2>
-            <p class="text-xs text-slate-500">Нажмите на категорию, чтобы отфильтровать список товаров ниже</p>
+            <h2 class="text-base font-bold text-slate-900" data-i18n="charts.categoryTitle">Расходы по категориям (чистая стоимость товаров)</h2>
+            <p class="text-xs text-slate-500" data-i18n="charts.categoryHint">Нажмите на категорию, чтобы отфильтровать список товаров ниже</p>
           </div>
           <button onclick="openNewCategoryModal()"
-            class="text-xs font-medium text-blue-600 hover:text-blue-800 border border-blue-200 bg-blue-50 px-2.5 py-1 rounded-lg">
-            + Своя категория
-          </button>
+            class="text-xs font-medium text-blue-600 hover:text-blue-800 border border-blue-200 bg-blue-50 px-2.5 py-1 rounded-lg" data-i18n="charts.addCategory">+ Своя категория</button>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-12 gap-4 items-center flex-1">
@@ -350,10 +348,10 @@
             <table class="w-full text-xs">
               <thead class="text-slate-400 border-b border-slate-100">
                 <tr>
-                  <th class="text-left py-1.5 font-medium">Категория</th>
-                  <th class="text-right py-1.5 font-medium">Позиций</th>
-                  <th class="text-right py-1.5 font-medium">Сумма</th>
-                  <th class="text-right py-1.5 font-medium">Доля</th>
+                  <th class="text-left py-1.5 font-medium" data-i18n="col.category">Категория</th>
+                  <th class="text-right py-1.5 font-medium" data-i18n="col.lines">Позиций</th>
+                  <th class="text-right py-1.5 font-medium" data-i18n="col.amount">Сумма</th>
+                  <th class="text-right py-1.5 font-medium" data-i18n="col.share">Доля</th>
                 </tr>
               </thead>
               <tbody id="categorySummaryTable" class="divide-y divide-slate-100"></tbody>
@@ -362,11 +360,11 @@
         </div>
       </div>
 
-      <!-- Динамика по месяцам -->
+      <!-- Monthly trend -->
       <div class="lg:col-span-5 bg-white rounded-2xl border border-slate-200 p-5 shadow-sm flex flex-col">
         <div class="mb-4">
-          <h2 class="text-base font-bold text-slate-900">Динамика трат по месяцам</h2>
-          <p class="text-xs text-slate-500">Помесячное распределение расходов по категориям</p>
+          <h2 class="text-base font-bold text-slate-900" data-i18n="charts.monthlyTitle">Динамика трат по месяцам</h2>
+          <p class="text-xs text-slate-500" data-i18n="charts.monthlyHint">Помесячное распределение расходов по категориям</p>
         </div>
         <div class="flex-1 min-h-[250px] flex items-center justify-center">
           <canvas id="monthlyBarChart"></canvas>
@@ -374,56 +372,56 @@
       </div>
     </section>
 
-    <!-- Детализация: Переключатель вкладок (Справочник Item# / Чеки) -->
+    <!-- Details: tab switcher (Item # catalog / Receipts) -->
     <section class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
       <div class="border-b border-slate-200 px-5 pt-4 flex flex-wrap items-center justify-between gap-3">
         <div class="flex gap-6">
           <button id="tabBtnItems" onclick="switchTab('items')"
             class="pb-3 text-sm font-bold border-b-2 border-blue-600 text-blue-600">
-            🏷️ Товары и Категории (Item #)
+            <span data-i18n="details.itemsTab">🏷️ Товары и Категории (Item #)</span>
           </button>
           <button id="tabBtnReceipts" onclick="switchTab('receipts')"
             class="pb-3 text-sm font-medium border-b-2 border-transparent text-slate-500 hover:text-slate-800">
-            🧾 Чеки и Онлайн-заказы
+            <span data-i18n="details.receiptsTab">🧾 Чеки и Онлайн-заказы</span>
           </button>
         </div>
 
-        <!-- Фильтры для вкладки товаров -->
+        <!-- Items tab filters -->
         <div id="itemsToolbar" class="flex flex-wrap items-center gap-2 pb-3">
           <select id="itemCategoryFilter" onchange="loadItemsTable()"
             class="border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs bg-white">
-            <option value="all">Все категории</option>
+            <option value="all" data-i18n="items.allCategories">Все категории</option>
           </select>
           <input type="text" id="itemSearchInput" oninput="loadItemsTable()"
-            placeholder="Поиск по Item# или названию..."
+            data-i18n-placeholder="items.searchPlaceholder" placeholder="Поиск по Item# или названию..."
             class="border border-slate-300 rounded-lg px-3 py-1.5 text-xs w-56 focus:outline-none focus:ring-2 focus:ring-blue-500" />
         </div>
       </div>
 
-      <!-- Вкладка 1: Таблица товаров и смена категории -->
+      <!-- Tab 1: items table and category editing -->
       <div id="tabContentItems" class="p-5 overflow-x-auto">
         <table class="w-full text-xs">
           <thead class="bg-slate-50 text-slate-500 uppercase tracking-wider">
             <tr>
               <th class="px-3 py-2.5 rounded-l-lg w-12"></th>
               <th class="text-left px-3 py-2.5">Item #</th>
-              <th class="text-left px-3 py-2.5">В чеке</th>
-              <th class="text-left px-3 py-2.5">Расшифровка (Gemini / Вручную)</th>
-              <th class="text-right px-3 py-2.5">Кол-во</th>
-              <th class="text-right px-3 py-2.5">До скидки</th>
-              <th class="text-right px-3 py-2.5">Скидка</th>
-              <th class="text-right px-3 py-2.5">Чистая сумма</th>
-              <th class="text-right px-3 py-2.5" title="Средняя цена со скидкой за фунт">$/lb</th>
-              <th class="text-right px-3 py-2.5" title="Средняя цена со скидкой за унцию веса (не fl oz)">$/oz</th>
-              <th class="text-left px-3 py-2.5">Категория (можно изменить)</th>
-              <th class="text-center px-3 py-2.5 rounded-r-lg">Источник</th>
+              <th class="text-left px-3 py-2.5" data-i18n="col.receiptText">В чеке</th>
+              <th class="text-left px-3 py-2.5" data-i18n="col.decoded">Расшифровка (Gemini / Вручную)</th>
+              <th class="text-right px-3 py-2.5" data-i18n="col.qty">Кол-во</th>
+              <th class="text-right px-3 py-2.5" data-i18n="col.gross">До скидки</th>
+              <th class="text-right px-3 py-2.5" data-i18n="col.discount">Скидка</th>
+              <th class="text-right px-3 py-2.5" data-i18n="col.netAmount">Чистая сумма</th>
+              <th class="text-right px-3 py-2.5" data-i18n-title="col.lbTitleItems" title="Средняя цена со скидкой за фунт">$/lb</th>
+              <th class="text-right px-3 py-2.5" data-i18n-title="col.ozTitleItems" title="Средняя цена со скидкой за унцию веса (не fl oz)">$/oz</th>
+              <th class="text-left px-3 py-2.5" data-i18n="col.categoryEditable">Категория (можно изменить)</th>
+              <th class="text-center px-3 py-2.5 rounded-r-lg" data-i18n="col.source">Источник</th>
             </tr>
           </thead>
           <tbody id="itemsTableBody" class="divide-y divide-slate-100"></tbody>
         </table>
       </div>
 
-      <!-- Вкладка 2: Список чеков -->
+      <!-- Tab 2: receipts list -->
       <div id="tabContentReceipts" class="hidden p-5 space-y-4">
         <div id="receiptsContainer" class="space-y-3"></div>
       </div>
@@ -431,14 +429,14 @@
     </div>
   </main>
 
-  <!-- Модальное окно настройки Gemini API -->
+  <!-- Gemini API settings modal -->
   <div id="geminiModal" class="hidden fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4">
     <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl space-y-4">
       <div class="flex items-center justify-between">
-        <h3 class="text-base font-bold text-slate-900">Настройка Gemini API</h3>
+        <h3 class="text-base font-bold text-slate-900" data-i18n="gemini.title">Настройка Gemini API</h3>
         <button onclick="closeGeminiModal()" class="text-slate-400 hover:text-slate-600">✕</button>
       </div>
-      <p class="text-xs text-slate-600 leading-relaxed">
+      <p class="text-xs text-slate-600 leading-relaxed" data-i18n-html="gemini.description">
         При первой встрече нового артикула (<b>Item #</b>) приложение отправляет сокращённое описание из чека в
         <b>Gemini API</b>, расшифровывает его и сохраняет категорию в локальную базу SQLite.
       </p>
@@ -449,26 +447,24 @@
       </div>
       <div class="flex items-center justify-between pt-2">
         <button onclick="reclassifyPendingWithGemini()"
-          class="text-xs text-blue-600 hover:underline font-medium">
-          Переклассифицировать ожидающие товары
-        </button>
+          class="text-xs text-blue-600 hover:underline font-medium" data-i18n="gemini.reclassify">Переклассифицировать ожидающие товары</button>
         <div class="flex gap-2">
-          <button onclick="closeGeminiModal()" class="px-3 py-1.5 rounded-lg text-xs border border-slate-300">Отмена</button>
-          <button onclick="saveGeminiKey()" class="px-4 py-1.5 rounded-lg text-xs font-semibold bg-brand-blue text-white">Сохранить</button>
+          <button onclick="closeGeminiModal()" class="px-3 py-1.5 rounded-lg text-xs border border-slate-300" data-i18n="common.cancel">Отмена</button>
+          <button onclick="saveGeminiKey()" class="px-4 py-1.5 rounded-lg text-xs font-semibold bg-brand-blue text-white" data-i18n="common.save">Сохранить</button>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Справка: как получить JSON для импорта -->
+  <!-- Help: how to get JSON for import -->
   <div id="importHelpModal" class="hidden fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4"
     onclick="if (event.target === this) closeImportHelp()">
     <div class="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 shadow-xl space-y-4 text-sm text-slate-700">
       <div class="flex items-center justify-between">
-        <h3 class="text-base font-bold text-slate-900">Как получить JSON с чеками</h3>
+        <h3 class="text-base font-bold text-slate-900" data-i18n="help.title">Как получить JSON с чеками</h3>
         <button onclick="closeImportHelp()" class="text-slate-400 hover:text-slate-600">✕</button>
       </div>
-      <p class="text-xs leading-relaxed">
+      <p class="text-xs leading-relaxed" data-i18n="help.intro">
         Импорт пригодится, если кнопка «Скачать» не срабатывает (например, сайт не пускает браузер Playwright).
         Чеки выгружаются из вашего обычного браузера готовым скриптом: он обращается к сайту магазина
         от вашего имени, собирает все чеки и сохраняет их в файл. Формат файла (Costco или Safeway)
@@ -476,42 +472,38 @@
       </p>
 
       <ol class="list-decimal pl-5 space-y-1.5 text-xs leading-relaxed">
-        <li>Откройте сайт магазина в Chrome и войдите в аккаунт:
+        <li data-i18n-html="help.step1">Откройте сайт магазина в Chrome и войдите в аккаунт:
           <b>costco.com</b> → Account → <b>Orders &amp; Purchases</b>, или
           <b>safeway.com</b> → Account → <b>Purchases</b>.</li>
-        <li>Нажмите кнопку ниже — скрипт скопируется в буфер обмена.</li>
-        <li>На странице магазина нажмите <b>F12</b>, перейдите на вкладку <b>Console</b>, вставьте скрипт
+        <li data-i18n-html="help.step2">Нажмите кнопку ниже — скрипт скопируется в буфер обмена.</li>
+        <li data-i18n-html="help.step3">На странице магазина нажмите <b>F12</b>, перейдите на вкладку <b>Console</b>, вставьте скрипт
           (<b>Ctrl+V</b>) и нажмите <b>Enter</b>.
           Если Chrome не даёт вставить и просит ввести <code class="bg-slate-100 px-1 rounded">allow pasting</code> —
           введите эту фразу, нажмите Enter и вставьте скрипт ещё раз.</li>
-        <li>Дождитесь сообщения «DigitalCheckAI: готово» — браузер сохранит файл
+        <li data-i18n-html="help.step4">Дождитесь сообщения «DigitalCheckAI: готово» — браузер сохранит файл
           <code class="bg-slate-100 px-1 rounded">costco-receipts.json</code> или
           <code class="bg-slate-100 px-1 rounded">safeway-receipts.json</code> в «Загрузки».</li>
-        <li>Здесь нажмите <b>«📂 Импорт JSON»</b> и выберите этот файл.</li>
+        <li data-i18n-html="help.step5">Здесь нажмите <b>«📂 Импорт JSON»</b> и выберите этот файл.</li>
       </ol>
 
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div class="rounded-xl border border-slate-200 p-3 space-y-2">
           <div class="font-semibold text-slate-900">🏬 Costco</div>
-          <p class="text-xs text-slate-500">Склад, заправки и онлайн-заказы за последние 3 года (около минуты на 100 чеков).</p>
+          <p class="text-xs text-slate-500" data-i18n="help.costcoDesc">Склад, заправки и онлайн-заказы за последние 3 года (около минуты на 100 чеков).</p>
           <button onclick="copyExportScript('costco')"
-            class="w-full px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-brand-blue hover:bg-blue-800">
-            Скопировать скрипт Costco
-          </button>
-          <a href="/static/export/costco-export.js" target="_blank" class="block text-center text-[11px] text-blue-600 hover:underline">посмотреть код</a>
+            class="w-full px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-brand-blue hover:bg-blue-800" data-i18n="help.copyCostco">Скопировать скрипт Costco</button>
+          <a href="/static/export/costco-export.js" target="_blank" class="block text-center text-[11px] text-blue-600 hover:underline" data-i18n="help.viewCode">посмотреть код</a>
         </div>
         <div class="rounded-xl border border-slate-200 p-3 space-y-2">
           <div class="font-semibold text-slate-900">🛒 Safeway</div>
-          <p class="text-xs text-slate-500">Все покупки в магазинах, которые показывает сайт Safeway.</p>
+          <p class="text-xs text-slate-500" data-i18n="help.safewayDesc">Все покупки в магазинах, которые показывает сайт Safeway.</p>
           <button onclick="copyExportScript('safeway')"
-            class="w-full px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-safeway-red hover:opacity-90">
-            Скопировать скрипт Safeway
-          </button>
-          <a href="/static/export/safeway-export.js" target="_blank" class="block text-center text-[11px] text-blue-600 hover:underline">посмотреть код</a>
+            class="w-full px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-safeway-red hover:opacity-90" data-i18n="help.copySafeway">Скопировать скрипт Safeway</button>
+          <a href="/static/export/safeway-export.js" target="_blank" class="block text-center text-[11px] text-blue-600 hover:underline" data-i18n="help.viewCode">посмотреть код</a>
         </div>
       </div>
 
-      <p class="text-[11px] text-slate-500 leading-relaxed">
+      <p class="text-[11px] text-slate-500 leading-relaxed" data-i18n="help.privacy">
         Скрипт только читает ваши чеки и никуда их не отправляет — файл сохраняется на вашем компьютере.
         В нём есть личные данные (номер клубной карты, последние цифры банковской карты), не пересылайте его другим.
         Вставляйте в консоль только код, которому доверяете: его можно посмотреть по ссылке «посмотреть код».
@@ -520,25 +512,26 @@
     </div>
   </div>
 
-  <!-- Модальное окно новой категории -->
+  <!-- New category modal -->
   <div id="newCategoryModal" class="hidden fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4">
     <div class="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl space-y-4">
       <div class="flex items-center justify-between">
-        <h3 class="text-base font-bold text-slate-900">Добавить свою категорию</h3>
+        <h3 class="text-base font-bold text-slate-900" data-i18n="newCat.title">Добавить свою категорию</h3>
         <button onclick="closeNewCategoryModal()" class="text-slate-400 hover:text-slate-600">✕</button>
       </div>
       <div>
-        <label class="block text-xs font-semibold text-slate-700 mb-1">Название категории</label>
-        <input type="text" id="newCategoryInput" placeholder="Например: Детские товары или Питомцы"
+        <label class="block text-xs font-semibold text-slate-700 mb-1" data-i18n="newCat.label">Название категории</label>
+        <input type="text" id="newCategoryInput" data-i18n-placeholder="newCat.placeholder" placeholder="Например: Детские товары или Питомцы"
           class="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" />
       </div>
       <div class="flex justify-end gap-2 pt-2">
-        <button onclick="closeNewCategoryModal()" class="px-3 py-1.5 rounded-lg text-xs border border-slate-300">Отмена</button>
-        <button onclick="createNewCategory()" class="px-4 py-1.5 rounded-lg text-xs font-semibold bg-brand-blue text-white">Добавить</button>
+        <button onclick="closeNewCategoryModal()" class="px-3 py-1.5 rounded-lg text-xs border border-slate-300" data-i18n="common.cancel">Отмена</button>
+        <button onclick="createNewCategory()" class="px-4 py-1.5 rounded-lg text-xs font-semibold bg-brand-blue text-white" data-i18n="common.add">Добавить</button>
       </div>
     </div>
   </div>
 
+  <script src="/static/i18n.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

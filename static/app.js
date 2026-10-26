@@ -1,4 +1,4 @@
-// Клиентская логика дашборда DigitalCheckAI
+// Client-side logic for the DigitalCheckAI dashboard
 let availableCategories = [];
 let donutChartInstance = null;
 let monthlyChartInstance = null;
@@ -7,12 +7,11 @@ let currentStore = "costco";
 const STORES = ["costco", "safeway", "all", "search"];
 const STORE_LABELS = { costco: "Costco", safeway: "Safeway" };
 let purchaseSearchTimer = null;
-const RECEIPT_TYPE_LABELS = {
-  warehouse: "Склад",
-  gas: "Заправка",
-  online: "Онлайн",
-  safeway: "Safeway"
-};
+const COSTCO_RECEIPT_TYPES = ["warehouse", "gas", "online"];
+
+function receiptTypeLabel(type) {
+  return COSTCO_RECEIPT_TYPES.includes(type) ? t(`receiptType.${type}`) : STORE_LABELS[type] || type;
+}
 
 const PALETTE = [
   "#005dab", "#e31837", "#10b981", "#f59e0b", "#8b5cf6",
@@ -26,7 +25,7 @@ function formatMoney(val) {
   return `${sign}$${Math.abs(num).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-// Цена за фунт/унцию: копейки за унцию видны только с тремя знаками
+// Price per pound/ounce: cents per ounce only show up with three decimals
 function formatUnitPrice(val) {
   if (val === null || val === undefined) return `<span class="text-slate-300">—</span>`;
   const digits = val < 1 ? 3 : 2;
@@ -85,7 +84,7 @@ function getFilterQueryParams() {
   if (startDate) params.set("start_date", startDate);
   if (endDate) params.set("end_date", endDate);
   params.set("store", currentStore);
-  // Типы покупок (склад / заправка / онлайн) есть только у Costco
+  // Purchase types (warehouse / gas / online) exist only for Costco
   if (receiptType && currentStore === "costco") params.set("receipt_type", receiptType);
   return params;
 }
@@ -113,7 +112,7 @@ function setStore(store) {
   try {
     localStorage.setItem("selectedStore", currentStore);
   } catch (e) {
-    // Хранилище недоступно — вкладка просто не запомнится
+    // Storage is unavailable, so the tab just won't be remembered
   }
   applyStoreUi();
   refreshAll();
@@ -129,10 +128,10 @@ async function loadConfig() {
   const txt = document.getElementById("geminiStatusText");
   if (data.has_gemini_key) {
     dot.className = "w-2 h-2 rounded-full bg-emerald-500";
-    txt.textContent = `Gemini AI активен (${data.gemini_model})`;
+    txt.textContent = t("gemini.active", { model: data.gemini_model });
   } else {
     dot.className = "w-2 h-2 rounded-full bg-amber-400";
-    txt.textContent = "Указать ключ Gemini API";
+    txt.textContent = t("gemini.setKey");
   }
   populateCategoryFilterSelect();
 }
@@ -140,11 +139,11 @@ async function loadConfig() {
 function populateCategoryFilterSelect() {
   const sel = document.getElementById("itemCategoryFilter");
   const current = sel.value || "all";
-  sel.innerHTML = `<option value="all">Все категории</option>`;
+  sel.innerHTML = `<option value="all">${escapeHtml(t("items.allCategories"))}</option>`;
   for (const cat of availableCategories) {
     const opt = document.createElement("option");
     opt.value = cat;
-    opt.textContent = cat;
+    opt.textContent = categoryLabel(cat);
     sel.appendChild(opt);
   }
   sel.value = availableCategories.includes(current) ? current : "all";
@@ -170,33 +169,37 @@ async function runPurchaseSearch() {
   const summary = document.getElementById("searchSummary");
   if (query.length < 2) {
     summary.textContent = "";
-    tbody.innerHTML = `<tr><td colspan="8" class="py-8 text-center text-slate-400">Введите хотя бы 2 символа.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="py-8 text-center text-slate-400">${escapeHtml(t("search.minChars"))}</td></tr>`;
     return;
   }
 
   const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
   const data = await res.json();
-  // Пока шёл запрос, пользователь мог изменить строку поиска
+  // The user may have changed the search text while the request was in flight
   if (document.getElementById("purchaseSearchInput").value.trim() !== query) return;
   const rows = data.results || [];
 
   if (!rows.length) {
     summary.textContent = "";
-    tbody.innerHTML = `<tr><td colspan="8" class="py-8 text-center text-slate-400">Ничего не найдено по запросу «${escapeHtml(query)}».</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="py-8 text-center text-slate-400">${escapeHtml(t("search.notFound", { query }))}</td></tr>`;
     return;
   }
 
   const totalGross = rows.reduce((sum, r) => sum + r.gross_amount, 0);
   const totalNet = rows.reduce((sum, r) => sum + r.net_amount, 0);
   const stores = [...new Set(rows.map(r => STORE_LABELS[r.store] || r.store))].join(", ");
-  summary.textContent =
-    `Найдено покупок: ${rows.length}${rows.length >= 500 ? " (показаны первые 500)" : ""} • ` +
-    `Магазины: ${stores} • До скидки: ${formatMoney(totalGross)} • Со скидкой: ${formatMoney(totalNet)}`;
+  summary.textContent = t("search.summary", {
+    count: rows.length,
+    limited: rows.length >= 500 ? t("search.limited") : "",
+    stores,
+    gross: formatMoney(totalGross),
+    net: formatMoney(totalNet)
+  });
 
   tbody.innerHTML = rows.map(r => {
     const hasDiscount = r.discount_amount > 0;
-    // У развесного товара цена за фунт уже есть в колонке $/lb
-    const unitNet = r.quantity && r.quantity !== 1 && !r.is_weight ?`<div class="text-[10px] text-slate-400">${formatMoney(r.net_amount / r.quantity)} за ед.</div>` : "";
+    // For sold-by-weight items the price per pound is already in the $/lb column
+    const unitNet = r.quantity && r.quantity !== 1 && !r.is_weight ? `<div class="text-[10px] text-slate-400">${escapeHtml(t("search.perUnit", { amount: formatMoney(r.net_amount / r.quantity) }))}</div>` : "";
     return `
       <tr class="hover:bg-slate-50">
         <td class="px-3 py-2 whitespace-nowrap font-medium text-slate-800">${escapeHtml(r.purchase_date)}</td>
@@ -223,7 +226,7 @@ async function runPurchaseSearch() {
 }
 
 async function loadMembershipAnalytics() {
-  // Аналитика карт Costco показывается только на вкладке Costco
+  // Costco membership analytics only show on the Costco tab
   if (currentStore !== "costco") return;
 
   const yearSelect = document.getElementById("membershipYearSelect");
@@ -246,19 +249,19 @@ async function loadMembershipAnalytics() {
   if (!res.ok) return;
   const data = await res.json();
 
-  // Обновляем список доступных лет в селекте
+  // Refresh the list of available years in the select
   if (yearSelect && Array.isArray(data.available_years)) {
     const prevValue = selectedMode === "auto" ? data.selected_year : selectedMode;
     yearSelect.innerHTML = "";
     for (const yr of data.available_years) {
       const opt = document.createElement("option");
       opt.value = yr;
-      opt.textContent = `${yr} год`;
+      opt.textContent = t("membership.yearOption", { year: yr });
       yearSelect.appendChild(opt);
     }
     const filterOpt = document.createElement("option");
     filterOpt.value = "filter";
-    filterOpt.textContent = "Текущий фильтр дат";
+    filterOpt.textContent = t("membership.currentFilter");
     yearSelect.appendChild(filterOpt);
 
     if ([...yearSelect.options].some(o => o.value === prevValue)) {
@@ -271,9 +274,9 @@ async function loadMembershipAnalytics() {
   const cmp = data.comparison || {};
   const proj = data.projection || {};
 
-  document.getElementById("membershipPeriodLabel").textContent = data.period_label || "";
-  document.getElementById("goldFeeText").textContent = `${formatMoney(p.gold_fee)} / год`;
-  document.getElementById("execFeeText").textContent = `${formatMoney(p.exec_fee)} / год`;
+  document.getElementById("membershipPeriodLabel").textContent = membershipPeriodLabel(data.selected_year, startDate, endDate);
+  document.getElementById("goldFeeText").textContent = t("card.perYear", { amount: formatMoney(p.gold_fee) });
+  document.getElementById("execFeeText").textContent = t("card.perYear", { amount: formatMoney(p.exec_fee) });
   document.getElementById("execRewardText").textContent = `+${formatMoney(cmp.estimated_reward)}`;
   document.getElementById("goldNetText").textContent = formatMoney(cmp.gold_net_balance);
   document.getElementById("execNetText").textContent = formatMoney(cmp.exec_net_balance);
@@ -303,7 +306,7 @@ async function loadMembershipAnalytics() {
     execWinnerTag.classList.remove("hidden");
     goldWinnerTag.classList.add("hidden");
     verdictBadge.className = "px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800";
-    verdictBadge.textContent = `Выгоднее Executive (+${formatMoney(cmp.exec_advantage_vs_gold)} чистой выгоды)`;
+    verdictBadge.textContent = t("membership.execBetter", { amount: formatMoney(cmp.exec_advantage_vs_gold) });
   } else {
     goldBox.className = "lg:col-span-4 rounded-xl border-2 border-amber-400 bg-amber-50/30 p-4 flex flex-col justify-between transition";
     execBox.className = "lg:col-span-4 rounded-xl border border-slate-200 p-4 flex flex-col justify-between transition";
@@ -311,7 +314,7 @@ async function loadMembershipAnalytics() {
     execWinnerTag.classList.add("hidden");
     const diff = Math.abs(cmp.exec_advantage_vs_gold || 0);
     verdictBadge.className = "px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800";
-    verdictBadge.textContent = `Выгоднее Gold Star (экономия ${formatMoney(diff)} на взносе)`;
+    verdictBadge.textContent = t("membership.goldBetter", { amount: formatMoney(diff) });
   }
 
   const pct = cmp.breakeven_progress_pct || 0;
@@ -326,12 +329,26 @@ async function loadMembershipAnalytics() {
 
   const summaryText = document.getElementById("breakevenSummaryText");
   if (isExecBetter) {
-    summaryText.innerHTML =
-      `Апгрейд до <b>Executive (+${formatMoney(p.upgrade_cost)})</b> полностью окупился! Чистая выгода над Gold Star: <b class="text-emerald-700">+${formatMoney(cmp.exec_advantage_vs_gold)}</b>`;
+    summaryText.innerHTML = t("breakeven.reached", {
+      cost: formatMoney(p.upgrade_cost),
+      advantage: formatMoney(cmp.exec_advantage_vs_gold)
+    });
   } else {
-    summaryText.innerHTML =
-      `До окупаемости <b>Executive (+${formatMoney(p.upgrade_cost)})</b> осталось потратить ещё <b>${formatMoney(cmp.spend_needed_for_breakeven)}</b> (порог: ${formatMoney(p.breakeven_upgrade_spend)} / год)`;
+    summaryText.innerHTML = t("breakeven.remaining", {
+      cost: formatMoney(p.upgrade_cost),
+      needed: formatMoney(cmp.spend_needed_for_breakeven),
+      threshold: formatMoney(p.breakeven_upgrade_spend)
+    });
   }
+}
+
+// The API also returns period_label, but only in Russian, so build it here in the UI language
+function membershipPeriodLabel(selectedYear, startDate, endDate) {
+  if (selectedYear !== "filter") return t("period.year", { year: selectedYear });
+  if (startDate && endDate) return t("period.range", { start: startDate, end: endDate });
+  if (startDate) return t("period.from", { start: startDate });
+  if (endDate) return t("period.to", { end: endDate });
+  return t("period.all");
 }
 
 async function loadStats() {
@@ -342,7 +359,7 @@ async function loadStats() {
 
   document.getElementById("kpiTotalSpent").textContent = formatMoney(s.total_spent);
   document.getElementById("kpiSubtotalTax").textContent =
-    `Товары: ${formatMoney(s.items_net_total)} • Налог: ${formatMoney(s.total_tax)}`;
+    t("kpi.subtotalTax", { items: formatMoney(s.items_net_total), tax: formatMoney(s.total_tax) });
   document.getElementById("kpiSavings").textContent = formatMoney(s.total_savings);
   document.getElementById("kpiReceiptCount").textContent = s.receipt_count || 0;
   document.getElementById("kpiAvgReceipt").textContent = formatMoney(s.average_receipt);
@@ -350,7 +367,7 @@ async function loadStats() {
   if (s.min_date && s.max_date) {
     document.getElementById("kpiDateRange").textContent = `${s.min_date} — ${s.max_date}`;
   } else {
-    document.getElementById("kpiDateRange").textContent = "Нет чеков за выбранный период";
+    document.getElementById("kpiDateRange").textContent = t("kpi.noReceiptsPeriod");
   }
 
   const typeCounts = currentStore === "costco" ? { warehouse: 0, gas: 0, online: 0 } : {};
@@ -358,8 +375,8 @@ async function loadStats() {
     typeCounts[t.receipt_type] = t.count;
   }
   document.getElementById("kpiReceiptTypes").textContent = Object.entries(typeCounts)
-    .map(([type, count]) => `${RECEIPT_TYPE_LABELS[type] || type}: ${count || 0}`)
-    .join(" • ") || "Нет чеков";
+    .map(([type, count]) => `${receiptTypeLabel(type)}: ${count || 0}`)
+    .join(" • ") || t("kpi.noReceipts");
 
   renderCategoryDonutAndTable(data.by_category || []);
   renderMonthlyBarChart(data.by_month || []);
@@ -370,7 +387,7 @@ function renderCategoryDonutAndTable(categoriesData) {
   tbody.innerHTML = "";
 
   if (!categoriesData.length) {
-    tbody.innerHTML = `<tr><td colspan="4" class="py-6 text-center text-slate-400">Нет данных за выбранный период. Нажмите «Скачать» в правом верхнем углу или «Импорт JSON».</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="4" class="py-6 text-center text-slate-400">${escapeHtml(t("charts.noData"))}</td></tr>`;
     if (donutChartInstance) {
       donutChartInstance.destroy();
       donutChartInstance = null;
@@ -379,12 +396,14 @@ function renderCategoryDonutAndTable(categoriesData) {
   }
 
   const labels = [];
+  const categoryKeys = [];
   const values = [];
   const colors = [];
 
   categoriesData.forEach((row, idx) => {
     const color = PALETTE[idx % PALETTE.length];
-    labels.push(row.category);
+    labels.push(categoryLabel(row.category));
+    categoryKeys.push(row.category);
     values.push(row.net_spent);
     colors.push(color);
 
@@ -394,7 +413,7 @@ function renderCategoryDonutAndTable(categoriesData) {
     tr.innerHTML = `
       <td class="py-2 pr-2 flex items-center gap-2 font-medium text-slate-800">
         <span class="w-2.5 h-2.5 rounded-full shrink-0" style="background-color: ${color}"></span>
-        <span class="truncate">${escapeHtml(row.category)}</span>
+        <span class="truncate">${escapeHtml(categoryLabel(row.category))}</span>
       </td>
       <td class="py-2 text-right text-slate-500">${row.line_count}</td>
       <td class="py-2 text-right font-semibold text-slate-900">${formatMoney(row.net_spent)}</td>
@@ -433,7 +452,7 @@ function renderCategoryDonutAndTable(categoriesData) {
       onClick: (_, elements) => {
         if (elements.length > 0) {
           const idx = elements[0].index;
-          filterByCategoryFromChart(labels[idx]);
+          filterByCategoryFromChart(categoryKeys[idx]);
         }
       }
     }
@@ -457,7 +476,7 @@ function renderMonthlyBarChart(monthlyRows) {
   const datasets = categories.map((cat, idx) => {
     const color = PALETTE[idx % PALETTE.length];
     return {
-      label: cat,
+      label: categoryLabel(cat),
       backgroundColor: color,
       data: months.map(m => {
         const found = monthlyRows.find(r => r.year_month === m && r.category === cat);
@@ -514,7 +533,7 @@ async function loadItemsTable() {
   tbody.innerHTML = "";
 
   if (!items.length) {
-    tbody.innerHTML = `<tr><td colspan="12" class="py-8 text-center text-slate-400">Товары не найдены для заданных фильтров.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="12" class="py-8 text-center text-slate-400">${escapeHtml(t("items.notFound"))}</td></tr>`;
     return;
   }
 
@@ -522,16 +541,16 @@ async function loadItemsTable() {
     const tr = document.createElement("tr");
     tr.className = "hover:bg-slate-50 transition";
 
-    let badgeHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600">Словарь</span>`;
+    let badgeHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600">${escapeHtml(t("source.dictionary"))}</span>`;
     if (item.is_manual_override) {
-      badgeHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-100 text-purple-700">Вручную</span>`;
+      badgeHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-100 text-purple-700">${escapeHtml(t("source.manual"))}</span>`;
     } else if (item.classified_by === "gemini") {
       badgeHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-700">Gemini AI</span>`;
     }
 
     const optionsHtml = availableCategories.map(cat => {
       const selected = cat === item.category ? "selected" : "";
-      return `<option value="${escapeHtml(cat)}" ${selected}>${escapeHtml(cat)}</option>`;
+      return `<option value="${escapeHtml(cat)}" ${selected}>${escapeHtml(categoryLabel(cat))}</option>`;
     }).join("");
 
     tr.innerHTML = `
@@ -542,7 +561,7 @@ async function loadItemsTable() {
         <textarea rows="1"
           onchange="updateItemCategory('${escapeJs(item.item_number)}', null, this.value)"
           onkeydown="if (event.key === 'Enter') { event.preventDefault(); this.blur(); }"
-          title="Нажмите, чтобы отредактировать расшифрованное название"
+          title="${escapeHtml(t("items.editNameTitle"))}"
           style="field-sizing: content"
           class="w-full resize-none overflow-hidden bg-transparent border border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white rounded px-1.5 py-0.5 text-slate-900 font-medium leading-snug focus:outline-none">${escapeHtml(item.clean_name)}</textarea>
       </td>
@@ -567,7 +586,7 @@ async function loadItemsTable() {
 async function updateItemCategory(itemNumber, newCategory, newCleanName) {
   let categoryToUse = newCategory;
   if (!categoryToUse) {
-    // Если изменилось только название, берём текущую категорию из DOM или запрашиваем
+    // If only the name changed, take the current category from the DOM or fetch it
     const rowSelect = document.querySelector(`select[onchange*="'${itemNumber}'"]`);
     categoryToUse = rowSelect ? rowSelect.value : "Прочее";
   }
@@ -584,10 +603,10 @@ async function updateItemCategory(itemNumber, newCategory, newCleanName) {
   });
 
   if (res.ok) {
-    showBanner(`Категория для Item #${itemNumber} сохранена в локальной базе и пересчитана во всех чеках.`, "success");
+    showBanner(t("banner.itemSaved", { item: itemNumber }), "success");
     await Promise.all([loadStats(), loadMembershipAnalytics(), loadItemsTable(), loadReceiptsList()]);
   } else {
-    showBanner(`Не удалось обновить Item #${itemNumber}`, "error");
+    showBanner(t("banner.itemFailed", { item: itemNumber }), "error");
   }
 }
 
@@ -600,16 +619,16 @@ async function loadReceiptsList() {
   container.innerHTML = "";
 
   if (!receipts.length) {
-    container.innerHTML = `<div class="py-8 text-center text-slate-400 text-xs">Чеки за выбранный период не найдены.</div>`;
+    container.innerHTML = `<div class="py-8 text-center text-slate-400 text-xs">${escapeHtml(t("receipts.notFound"))}</div>`;
     return;
   }
 
   for (const r of receipts) {
-    let badge = `<span class="px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-50 text-blue-700">🏪 Склад</span>`;
+    let badge = `<span class="px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-50 text-blue-700">${escapeHtml(t("badge.warehouse"))}</span>`;
     if (r.receipt_type === "gas") {
-      badge = `<span class="px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-700">⛽ Заправка</span>`;
+      badge = `<span class="px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-700">${escapeHtml(t("badge.gas"))}</span>`;
     } else if (r.receipt_type === "online") {
-      badge = `<span class="px-2 py-0.5 rounded text-[11px] font-semibold bg-purple-50 text-purple-700">📦 Онлайн</span>`;
+      badge = `<span class="px-2 py-0.5 rounded text-[11px] font-semibold bg-purple-50 text-purple-700">${escapeHtml(t("badge.online"))}</span>`;
     } else if (r.receipt_type === "safeway") {
       badge = `<span class="px-2 py-0.5 rounded text-[11px] font-semibold bg-red-50 text-red-700">🛒 Safeway</span>`;
     }
@@ -621,7 +640,7 @@ async function loadReceiptsList() {
         <td class="py-1.5 px-2 font-medium text-slate-800">
           <div class="flex items-center gap-2">${thumbHtml(item.image_file, "w-8 h-8")}<span>${escapeHtml(item.clean_name)}</span></div>
         </td>
-        <td class="py-1.5 px-2"><span class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[11px]">${escapeHtml(item.category)}</span></td>
+        <td class="py-1.5 px-2"><span class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[11px]">${escapeHtml(categoryLabel(item.category))}</span></td>
         <td class="py-1.5 px-2 text-right text-slate-500">${item.quantity}</td>
         <td class="py-1.5 px-2 text-right text-slate-500">${item.discount_amount > 0 ? `<s>${formatMoney(item.gross_amount)}</s>` : formatMoney(item.gross_amount)}</td>
         <td class="py-1.5 px-2 text-right text-emerald-600">${item.discount_amount > 0 ? "-" + formatMoney(item.discount_amount) : "—"}</td>
@@ -642,8 +661,8 @@ async function loadReceiptsList() {
           <span class="text-[11px] font-mono text-slate-400">#${escapeHtml(r.transaction_barcode)}</span>
         </div>
         <div class="flex items-center gap-4 text-xs">
-          ${r.instant_savings > 0 ? `<span class="text-emerald-600 font-medium">Скидка: -${formatMoney(r.instant_savings)}</span>` : ""}
-          <span class="text-slate-500">Налог: ${formatMoney(r.tax)}</span>
+          ${r.instant_savings > 0 ? `<span class="text-emerald-600 font-medium">${escapeHtml(t("receipts.discount", { amount: formatMoney(r.instant_savings) }))}</span>` : ""}
+          <span class="text-slate-500">${escapeHtml(t("receipts.tax", { amount: formatMoney(r.tax) }))}</span>
           <span class="font-extrabold text-slate-900 text-sm">${formatMoney(r.total)}</span>
         </div>
       </summary>
@@ -652,13 +671,13 @@ async function loadReceiptsList() {
           <thead class="text-slate-400">
             <tr>
               <th class="text-left py-1 px-2">Item #</th>
-              <th class="text-left py-1 px-2">В чеке</th>
-              <th class="text-left py-1 px-2">Расшифровка</th>
-              <th class="text-left py-1 px-2">Категория</th>
-              <th class="text-right py-1 px-2">Кол-во</th>
-              <th class="text-right py-1 px-2">До скидки</th>
-              <th class="text-right py-1 px-2">Скидка</th>
-              <th class="text-right py-1 px-2">Чистая сумма</th>
+              <th class="text-left py-1 px-2">${escapeHtml(t("col.receiptText"))}</th>
+              <th class="text-left py-1 px-2">${escapeHtml(t("col.decodedShort"))}</th>
+              <th class="text-left py-1 px-2">${escapeHtml(t("col.category"))}</th>
+              <th class="text-right py-1 px-2">${escapeHtml(t("col.qty"))}</th>
+              <th class="text-right py-1 px-2">${escapeHtml(t("col.gross"))}</th>
+              <th class="text-right py-1 px-2">${escapeHtml(t("col.discount"))}</th>
+              <th class="text-right py-1 px-2">${escapeHtml(t("col.netAmount"))}</th>
               <th class="text-right py-1 px-2">$/lb</th>
               <th class="text-right py-1 px-2">$/oz</th>
             </tr>
@@ -685,8 +704,8 @@ async function runStoreSync(url, buttonId, siteName) {
   const btn = document.getElementById(buttonId);
   const originalHtml = btn.innerHTML;
   btn.disabled = true;
-  btn.textContent = `⏳ Открываем браузер ${siteName}...`;
-  showBanner(`Открыто окно браузера Playwright. Войдите в аккаунт ${siteName} (если требуется 2FA) — чеки выгрузятся автоматически.`, "info");
+  btn.textContent = t("sync.opening", { site: siteName });
+  showBanner(t("sync.browserOpened", { site: siteName }), "info");
 
   try {
     const res = await fetch(url, {
@@ -696,10 +715,15 @@ async function runStoreSync(url, buttonId, siteName) {
     });
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data.detail || "Ошибка синхронизации");
+      throw new Error(data.detail || t("sync.error"));
     }
     showBanner(
-      `Успешно загружено чеков: ${data.fetched_receipts} (новых: ${data.inserted_receipts}). Расшифровано новых Item#: ${data.new_items_count} (${data.classification.provider}).`,
+      t("sync.success", {
+        fetched: data.fetched_receipts,
+        inserted: data.inserted_receipts,
+        newItems: data.new_items_count,
+        provider: data.classification.provider
+      }),
       "success"
     );
     await refreshAll();
@@ -716,7 +740,7 @@ async function importJsonFile(event) {
   if (!file) return;
   const formData = new FormData();
   formData.append("file", file);
-  showBanner(`Импортируем файл ${file.name}...`, "info");
+  showBanner(t("import.importing", { file: file.name }), "info");
 
   const res = await fetch("/api/import", { method: "POST", body: formData });
   const data = await res.json();
@@ -726,13 +750,18 @@ async function importJsonFile(event) {
     setPresetAll();
     const storeName = data.store === "safeway" ? "Safeway" : "Costco";
     showBanner(
-      `Импортировано чеков ${storeName}: ${data.fetched_receipts} (новых: ${data.inserted_receipts}). ` +
-      `Новых товаров категоризировано: ${data.new_items_count}. Скачано фото: ${data.images_downloaded || 0}.`,
+      t("import.success", {
+        store: storeName,
+        fetched: data.fetched_receipts,
+        inserted: data.inserted_receipts,
+        newItems: data.new_items_count,
+        images: data.images_downloaded || 0
+      }),
       "success"
     );
     await refreshAll();
   } else {
-    showBanner(data.detail || "Ошибка импорта JSON", "error");
+    showBanner(data.detail || t("import.error"), "error");
   }
 }
 
@@ -761,7 +790,7 @@ function closeGeminiModal() {
 async function saveGeminiKey() {
   const key = document.getElementById("geminiKeyInput").value.trim();
   if (!key) return;
-  showBanner("Сохраняем ключ Gemini API и расшифровываем ожидающие товары...", "info");
+  showBanner(t("gemini.saving"), "info");
   const res = await fetch("/api/config/gemini-key", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -770,18 +799,21 @@ async function saveGeminiKey() {
   if (res.ok) {
     closeGeminiModal();
     document.getElementById("geminiKeyInput").value = "";
-    showBanner("Ключ Gemini API сохранён! Новые артикулы расшифрованы.", "success");
+    showBanner(t("gemini.saved"), "success");
     await refreshAll();
   }
 }
 
 async function reclassifyPendingWithGemini() {
   closeGeminiModal();
-  showBanner("Запускаем классификацию через Gemini API...", "info");
+  showBanner(t("gemini.classifying"), "info");
   const res = await fetch("/api/reclassify-pending", { method: "POST" });
   const data = await res.json();
   if (res.ok) {
-    showBanner(`Обработано товаров: ${data.classification.classified_count} (${data.classification.provider}).`, "success");
+    showBanner(
+      t("gemini.processed", { count: data.classification.classified_count, provider: data.classification.provider }),
+      "success"
+    );
     await refreshAll();
   }
 }
@@ -802,10 +834,10 @@ async function copyExportScript(store) {
     const res = await fetch(`/static/export/${store}-export.js`);
     await navigator.clipboard.writeText(await res.text());
     status.className = "text-xs font-medium text-emerald-700";
-    status.textContent = `Скрипт ${name} скопирован. Вставьте его в консоль на сайте ${name} (шаг 3).`;
+    status.textContent = t("help.copied", { store: name });
   } catch (err) {
     status.className = "text-xs font-medium text-red-700";
-    status.textContent = `Не удалось скопировать автоматически. Откройте «посмотреть код» и скопируйте текст вручную.`;
+    status.textContent = t("help.copyFailed");
   }
 }
 
@@ -828,7 +860,7 @@ async function createNewCategory() {
   if (res.ok) {
     document.getElementById("newCategoryInput").value = "";
     closeNewCategoryModal();
-    showBanner(`Категория «${name}» добавлена! Теперь её можно выбрать для любого товара.`, "success");
+    showBanner(t("newCat.added", { name }), "success");
     await refreshAll();
   }
 }
@@ -858,8 +890,9 @@ window.addEventListener("DOMContentLoaded", () => {
     const saved = localStorage.getItem("selectedStore");
     if (STORES.includes(saved)) currentStore = saved;
   } catch (e) {
-    // Хранилище недоступно — открываем вкладку Costco
+    // Storage is unavailable, so open the Costco tab
   }
+  applyStaticTranslations();
   applyStoreUi();
   setPresetDays(90);
 });
