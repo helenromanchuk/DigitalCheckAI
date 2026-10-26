@@ -1,0 +1,1 @@
+"""REST API пакет DigitalCheckAI."""
