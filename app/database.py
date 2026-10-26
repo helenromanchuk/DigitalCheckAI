@@ -161,7 +161,7 @@ class Database:
                     MAX(ri.unit_price) AS sample_unit_price
                 FROM item_catalog c
                 LEFT JOIN receipt_items ri ON ri.item_number = c.item_number
-                WHERE c.is_manual_override = 0 AND c.classified_by != 'gemini'
+                WHERE c.is_manual_override = 0 AND c.classified_by NOT IN ('gemini', 'parser')
                 GROUP BY c.item_number
                 """
             ).fetchall()
@@ -367,22 +367,26 @@ class Database:
                     ).fetchone()
 
                     if cat_row is None:
+                        # The parser already knows the category (fuel): keep it and don't send the item
+                        # to Gemini or the fallback, which could move fuel out of the gas category
+                        from_parser = bool(line.get("default_category"))
                         default_cat = line.get("default_category") or "Прочее"
                         default_clean = line.get("default_clean_name") or raw_desc
                         conn.execute(
                             """
                             INSERT INTO item_catalog
                                 (item_number, raw_description, clean_name, category, is_manual_override, classified_by, updated_at)
-                            VALUES (?, ?, ?, ?, 0, 'pending', ?)
+                            VALUES (?, ?, ?, ?, 0, ?, ?)
                             """,
-                            (item_num, raw_desc, default_clean, default_cat, now),
+                            (item_num, raw_desc, default_clean, default_cat, "parser" if from_parser else "pending", now),
                         )
-                        new_items_for_catalog[item_num] = {
-                            "item_number": item_num,
-                            "raw_description": raw_desc,
-                            "sample_unit_price": float(line.get("unit_price", 0.0)),
-                            "receipt_type": receipt.get("receipt_type", "warehouse"),
-                        }
+                        if not from_parser:
+                            new_items_for_catalog[item_num] = {
+                                "item_number": item_num,
+                                "raw_description": raw_desc,
+                                "sample_unit_price": float(line.get("unit_price", 0.0)),
+                                "receipt_type": receipt.get("receipt_type", "warehouse"),
+                            }
 
                     if line.get("image_url"):
                         conn.execute(
@@ -569,8 +573,12 @@ class Database:
             where_sql += " AND c.category = ? "
             params.append(category)
         if search and search.strip():
-            q = f"%{search.strip()}%"
-            where_sql += " AND (c.item_number LIKE ? OR c.raw_description LIKE ? OR c.clean_name LIKE ?) "
+            # LIKE ignores case only for ASCII, so compare casefolded text (as search_purchases does)
+            q = f"%{search.strip().casefold()}%"
+            where_sql += (
+                " AND (casefold(c.item_number) LIKE ? OR casefold(c.raw_description) LIKE ?"
+                " OR casefold(c.clean_name) LIKE ?) "
+            )
             params.extend([q, q, q])
 
         with self.connect() as conn:

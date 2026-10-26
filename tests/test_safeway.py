@@ -193,3 +193,32 @@ def test_store_column_migration_for_existing_db(tmp_path: Path):
     conn = sqlite3.connect(db_path)
     assert conn.execute("SELECT store FROM receipts WHERE transaction_barcode = 'X'").fetchone()[0] == "costco"
     conn.close()
+
+
+def test_items_search_is_case_insensitive_for_cyrillic_and_slash_item_numbers(tmp_path: Path, monkeypatch):
+    test_db = Database(tmp_path / "items.db")
+    app.dependency_overrides[get_db] = lambda: test_db
+    monkeypatch.setattr("app.categorizer.gemini_classifier.get_gemini_api_key", lambda: "")
+    client = TestClient(app)
+
+    test_db.upsert_receipts([{
+        "transaction_barcode": "S-1",
+        "transaction_date": "2026-09-01T10:00:00",
+        "store": "safeway",
+        "receipt_type": "safeway",
+        "items": [
+            {"item_number": "SWY-MILK 1/2 GAL", "raw_description": "MILK 1/2 GAL", "quantity": 1, "unit_price": 3.0,
+             "gross_amount": 3.0, "discount_amount": 0.0, "net_amount": 3.0},
+        ],
+    }])
+    test_db.update_item_category_manual("SWY-MILK 1/2 GAL", "Молочные продукты, сыр и яйца", "Молоко 2%")
+
+    rows = client.get("/api/items?store=all&search=МОЛОКО").json()["items"]
+    assert [r["item_number"] for r in rows] == ["SWY-MILK 1/2 GAL"]
+
+    # An item number with "/" is encoded as %2F by the frontend and must still reach the route
+    res = client.patch("/api/items/SWY-MILK%201%2F2%20GAL", json={"category": "Прочее"})
+    assert res.status_code == 200
+    assert res.json()["item"]["category"] == "Прочее"
+
+    app.dependency_overrides.clear()

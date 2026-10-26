@@ -1,6 +1,7 @@
 """Decodes Costco Item #s and categorizes purchases with the Gemini API, caching results in SQLite."""
 import json
 import logging
+import re
 from typing import Any
 from pydantic import BaseModel, Field
 
@@ -88,7 +89,7 @@ FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
         },
     ),
     (
-        ["COQ10", "VITAMIN", "ADVIL", "TYLENOL", "SHAMPOO", "TOOTHPASTE", "LOTION", "ALLERGY"],
+        ["COQ10", "VITAMIN", "ADVIL", "TYLENOL", "SHAMPOO", "TOOTHPASTE", "LOTION", "ALLERGY", "SUNSCREEN"],
         "Здоровье, аптека, витамины и гигиена",
         {
             "COQ10 300MG 100CT": "Коэнзим Q10 Kirkland Signature 300 мг (100 капсул)",
@@ -125,32 +126,42 @@ FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
 ]
 
 
+def _keyword_matches(keyword: str, words: list[str], text: str) -> bool:
+    """
+    Multi-word keywords match as a phrase; short ones (up to 3 letters, e.g. "TV", "PAN") only as a
+    whole word; longer ones as a word prefix ("STRAWBERR" -> "STRAWBERRIES", but "RICE" not in "PRICE").
+    """
+    if " " in keyword:
+        return re.search(rf"\b{re.escape(keyword)}", text) is not None
+    if len(keyword) <= 3:
+        return keyword in words
+    return any(word.startswith(keyword) for word in words)
+
+
 def fallback_categorize_item(item_number: str, raw_description: str) -> dict[str, str]:
     """Local dictionary-based decoding and categorization (used only when GEMINI_API_KEY is missing)."""
     upper = raw_description.upper().strip()
-    for keywords, category, exact_map in FALLBACK_RULES:
-        if upper in exact_map:
-            return {
-                "item_number": item_number,
-                "raw_description": raw_description,
-                "clean_name": exact_map[upper],
-                "category": category,
-            }
-        for kw in keywords:
-            if kw in upper:
-                clean = exact_map.get(upper, raw_description.title())
-                return {
-                    "item_number": item_number,
-                    "raw_description": raw_description,
-                    "clean_name": clean,
-                    "category": category,
-                }
-    return {
+    result = {
         "item_number": item_number,
         "raw_description": raw_description,
         "clean_name": raw_description.title(),
         "category": "Прочее",
     }
+
+    # Exact names win over keywords from any rule (otherwise "APPLE AIRPODS..." ends up in produce)
+    for _, category, exact_map in FALLBACK_RULES:
+        if upper in exact_map:
+            return {**result, "clean_name": exact_map[upper], "category": category}
+
+    # Among keyword hits the longest keyword wins: "AIRPODS" is more specific than "APPLE"
+    words = re.findall(r"[A-Z0-9]+", upper)
+    best_len = 0
+    for keywords, category, _ in FALLBACK_RULES:
+        for kw in keywords:
+            if len(kw) > best_len and _keyword_matches(kw, words, upper):
+                best_len = len(kw)
+                result["category"] = category
+    return result
 
 
 class GeminiItemClassifier:

@@ -559,7 +559,6 @@ async function loadItemsTable() {
       <td class="px-3 py-2.5 font-mono text-slate-500 max-w-[14rem] break-words">${escapeHtml(item.raw_description)}</td>
       <td class="px-3 py-2.5 min-w-[18rem]">
         <textarea rows="1"
-          onchange="updateItemCategory('${escapeJs(item.item_number)}', null, this.value)"
           onkeydown="if (event.key === 'Enter') { event.preventDefault(); this.blur(); }"
           title="${escapeHtml(t("items.editNameTitle"))}"
           style="field-sizing: content"
@@ -572,26 +571,25 @@ async function loadItemsTable() {
       <td class="px-3 py-2.5 text-right text-slate-700">${formatUnitPrice(item.price_per_lb)}</td>
       <td class="px-3 py-2.5 text-right text-slate-700">${formatUnitPrice(item.price_per_oz)}</td>
       <td class="px-3 py-2.5">
-        <select onchange="updateItemCategory('${escapeJs(item.item_number)}', this.value, null)"
+        <select
           class="border border-slate-300 rounded-lg px-2 py-1 text-xs bg-white font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500">
           ${optionsHtml}
         </select>
       </td>
       <td class="px-3 py-2.5 text-center">${badgeHtml}</td>
     `;
+    // Handlers are attached here rather than inline: Safeway item numbers are built from names
+    // and may contain quotes that would break an onchange="..." attribute
+    const nameInput = tr.querySelector("textarea");
+    const categorySelect = tr.querySelector("select");
+    nameInput.addEventListener("change", () => updateItemCategory(item.item_number, categorySelect.value, nameInput.value));
+    categorySelect.addEventListener("change", () => updateItemCategory(item.item_number, categorySelect.value, null));
     tbody.appendChild(tr);
   }
 }
 
-async function updateItemCategory(itemNumber, newCategory, newCleanName) {
-  let categoryToUse = newCategory;
-  if (!categoryToUse) {
-    // If only the name changed, take the current category from the DOM or fetch it
-    const rowSelect = document.querySelector(`select[onchange*="'${itemNumber}'"]`);
-    categoryToUse = rowSelect ? rowSelect.value : "Прочее";
-  }
-
-  const body = { category: categoryToUse };
+async function updateItemCategory(itemNumber, category, newCleanName) {
+  const body = { category };
   if (newCleanName !== null && newCleanName !== undefined) {
     body.clean_name = newCleanName;
   }
@@ -879,10 +877,6 @@ function escapeHtml(str) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
-}
-
-function escapeJs(str) {
-  return String(str ?? "").replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
 
 window.addEventListener("DOMContentLoaded", () => {

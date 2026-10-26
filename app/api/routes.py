@@ -243,7 +243,8 @@ def get_items(
     return {"items": items, "categories": db.get_all_categories()}
 
 
-@router.patch("/items/{item_number}")
+# ":path" so that item numbers with "/" (Safeway numbers built from names, e.g. "MILK 1/2 GAL") still match
+@router.patch("/items/{item_number:path}")
 def update_item_category(
     item_number: str,
     payload: UpdateItemCategoryRequest,

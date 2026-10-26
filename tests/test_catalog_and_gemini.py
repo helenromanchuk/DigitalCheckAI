@@ -144,3 +144,43 @@ def test_gemini_unknown_item_numbers_are_ignored(tmp_path: Path, monkeypatch):
 
     assert [r["item_number"] for r in results] == ["123456"]
     assert results[0]["clean_name"] == "Olive Oil"
+
+
+def test_fallback_prefers_exact_names_and_specific_keywords():
+    from app.categorizer.gemini_classifier import fallback_categorize_item
+
+    def category(desc):
+        return fallback_categorize_item("1", desc)["category"]
+
+    # The exact name from the electronics rule beats "APPLE" from produce
+    assert category("APPLE AIRPODS PRO 2ND GEN USB-C") == "Электроника и техника"
+    # A longer keyword wins: "AIRPODS" over "APPLE"
+    assert category("APPLE AIRPODS MAX") == "Электроника и техника"
+    # No substring hits inside other words
+    assert category("PRICE MATCH ADJ") == "Прочее"
+    assert category("PANCAKE MIX") == "Прочее"
+    assert category("TVORT CHEESE") == "Молочные продукты, сыр и яйца"
+    # Prefix keywords still work
+    assert category("ORG STRAWBERRIES 2LB") == "Овощи, фрукты и ягоды"
+    assert category("SUNSCREEN CREAM SPF50") == "Здоровье, аптека, витамины и гигиена"
+    assert category("BOUNTY PAPER TOWEL 12CT") == "Бытовая химия, бумага и уборка"
+
+
+def test_fuel_keeps_parser_category_and_skips_classifier(tmp_path: Path):
+    db = Database(tmp_path / "test_costco.db")
+    result = db.upsert_receipts(
+        parse_any_costco_payload(
+            {
+                "transactionBarcode": "GAS-1",
+                "transactionDate": "2026-10-01",
+                "documentType": "FuelReceipt",
+                "itemArray": [{"itemNumber": "800877", "itemDescription01": "REGULAR", "unit": 10, "amount": 45.0}],
+            }
+        )
+    )
+
+    assert result["new_items"] == []
+    assert db.get_pending_items_for_gemini() == []
+    with db.connect() as conn:
+        row = conn.execute("SELECT category, classified_by FROM item_catalog WHERE item_number = '800877'").fetchone()
+    assert (row["category"], row["classified_by"]) == ("Авто и заправка (Gas Station)", "parser")

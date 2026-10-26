@@ -353,7 +353,13 @@ class CostcoClient:
                     reopened_orders_page = True
                     page.goto(COSTCO_MYACCOUNT_ORDERS_URL, wait_until="domcontentloaded", timeout=60000)
                     continue
-                page.wait_for_load_state("networkidle", timeout=30000)
+                from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+                try:
+                    page.wait_for_load_state("networkidle", timeout=30000)
+                except PlaywrightTimeoutError:
+                    # Analytics and Kasada keep polling, so the page may never go idle; the token is already there
+                    logger.info("Страница заказов не перешла в networkidle за 30 с, продолжаем синхронизацию")
                 return
 
             page.wait_for_timeout(1500)
