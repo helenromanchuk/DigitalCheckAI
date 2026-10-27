@@ -12,7 +12,6 @@ from app.config import (
     DEFAULT_CATEGORY_LABELS_EN,
     DEFAULT_CATEGORY_SCOPES,
     FUEL_CATEGORY,
-    clashes_with_default_category,
     get_gemini_api_key,
     get_gemini_model,
     merge_category_labels_en,
@@ -329,20 +328,6 @@ def _same_item_number(returned: str, expected: str, batch_inums: set[str]) -> bo
     return ret_core == exp_core
 
 
-def _categories_for_gemini(categories: list[str], custom_labels_en: dict[str, str]) -> list[str]:
-    """
-    Drops custom categories whose name or English label repeats a default one (created before such names
-    were rejected), so a custom "Other" can't compete with "Прочее" in the prompt.
-    """
-    result = []
-    for cat in categories:
-        if clashes_with_default_category(cat, custom_labels_en.get(cat, "")):
-            logger.warning("Категория %r совпадает со стандартной и не отправляется в Gemini; переименуйте её.", cat)
-            continue
-        result.append(cat)
-    return result
-
-
 def _make_gemini_client(api_key: str) -> Any:
     """Creates a Gemini API client with a finite HTTP timeout."""
     from google import genai
@@ -383,7 +368,6 @@ class GeminiItemClassifier:
 
         try:
             custom_labels_en = self.db.get_category_labels_en()
-            categories = _categories_for_gemini(categories, custom_labels_en)
             client = _make_gemini_client(api_key)
         except Exception as exc:
             logger.warning("Не удалось подготовить вызов Gemini API (%s), применяем fallback.", exc)

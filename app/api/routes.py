@@ -283,11 +283,14 @@ def update_item_category(
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
     """Lets the user manually change the category (and/or name) of the given Item #."""
-    updated = db.update_item_category_manual(
-        item_number=item_number,
-        category=payload.category,
-        clean_name=payload.clean_name,
-    )
+    try:
+        updated = db.update_item_category_manual(
+            item_number=item_number,
+            category=payload.category,
+            clean_name=payload.clean_name,
+        )
+    except AppError as exc:
+        raise HTTPException(status_code=400, detail=exc.to_detail()) from exc
     if not updated:
         raise HTTPException(
             status_code=404,

@@ -122,19 +122,6 @@ _DEFAULT_CATEGORIES_SPEC: list[tuple[str, str, str]] = [
 DEFAULT_CATEGORIES: list[str] = [name for name, _, _ in _DEFAULT_CATEGORIES_SPEC]
 DEFAULT_CATEGORY_LABELS_EN: dict[str, str] = {name: en for name, en, _ in _DEFAULT_CATEGORIES_SPEC}
 DEFAULT_CATEGORY_SCOPES: dict[str, str] = {name: scope for name, _, scope in _DEFAULT_CATEGORIES_SPEC}
-# Default names and English labels (casefolded) that custom categories may not reuse
-RESERVED_CATEGORY_NAMES: frozenset[str] = frozenset(
-    value.casefold() for name, en, _ in _DEFAULT_CATEGORIES_SPEC for value in (name, en)
-)
-
-
-def clashes_with_default_category(name: str, name_en: str = "") -> bool:
-    """True for a non-default category whose name or English label repeats a default category's."""
-    if name in DEFAULT_CATEGORY_LABELS_EN:
-        return False
-    return any(value.strip().casefold() in RESERVED_CATEGORY_NAMES for value in (name, name_en) if value.strip())
-
-
 def merge_category_labels_en(custom_labels_en: dict[str, str] | None = None) -> dict[str, str]:
     """Combines custom and default English category labels, with defaults taking precedence."""
     return {**(custom_labels_en or {}), **DEFAULT_CATEGORY_LABELS_EN}

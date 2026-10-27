@@ -758,12 +758,52 @@ def test_gemini_setup_failure_falls_back_once(tmp_path: Path, monkeypatch):
     assert result["provider"] == "fallback"
 
 
-def test_custom_categories_clashing_with_defaults_are_not_sent_to_gemini():
-    from app.categorizer.gemini_classifier import _categories_for_gemini
+def test_startup_merges_custom_categories_clashing_with_defaults(tmp_path: Path):
+    db_path = tmp_path / "test_costco.db"
+    db = Database(db_path)
+    # Rows saved before names were checked, written directly to skip add_custom_category
+    with db.connect() as conn:
+        conn.executemany(
+            "INSERT INTO custom_categories (name, name_en, created_at) VALUES (?, ?, '2026-10-01')",
+            [("Other", ""), ("Вино", "Alcohol"), ("Прочее", "Misc"), (" ", ""), ("Питомцы", "Pets")],
+        )
+        conn.executemany(
+            """
+            INSERT INTO item_catalog (item_number, raw_description, clean_name, category, is_manual_override, classified_by, updated_at)
+            VALUES (?, ?, ?, ?, 1, 'manual', '2026-10-01')
+            """,
+            [("1", "LEGO", "LEGO", "Other"), ("2", "WINE", "Wine", "Вино"), ("3", "X", "X", " ")],
+        )
 
-    categories = ["Прочее", "Алкоголь", "Other", "Вино", "Питомцы"]
-    labels = {"Вино": "Alcohol", "Питомцы": "Pets"}
-    assert _categories_for_gemini(categories, labels) == ["Прочее", "Алкоголь", "Питомцы"]
+    db = Database(db_path)
+
+    categories = db.get_all_categories()
+    assert "Other" not in categories and " " not in categories
+    assert "Вино" in categories and "Питомцы" in categories
+    assert db.get_category_labels_en() == {"Питомцы": "Pets"}
+    with db.connect() as conn:
+        rows = dict(conn.execute("SELECT item_number, category FROM item_catalog").fetchall())
+    assert rows == {"1": "Прочее", "2": "Вино", "3": "Прочее"}
+
+
+def test_blank_category_names_are_rejected(tmp_path: Path):
+    import pytest
+
+    from app.errors import AppError
+
+    db = Database(tmp_path / "test_costco.db")
+    with db.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO item_catalog (item_number, raw_description, clean_name, category, is_manual_override, classified_by, updated_at)
+            VALUES ('5555', 'DOG FOOD', 'Dog Food', 'Прочее', 0, 'fallback', '2026-10-01')
+            """
+        )
+    for call in (lambda: db.add_custom_category("   "), lambda: db.update_item_category_manual("5555", "  ")):
+        with pytest.raises(AppError) as exc_info:
+            call()
+        assert exc_info.value.code == "category_empty"
+    assert "" not in db.get_all_categories()
 
 
 def test_duplicate_gemini_ids_are_logged(tmp_path: Path, caplog):

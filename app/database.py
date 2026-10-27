@@ -20,6 +20,10 @@ def _category_reserved(value: str) -> AppError:
     return AppError("category_reserved", f"'{value}' is already used by another category.", name=value)
 
 
+def _category_empty() -> AppError:
+    return AppError("category_empty", "The category name is empty.")
+
+
 class Database:
     """Manages the DigitalCheckAI SQLite database."""
 
@@ -121,6 +125,7 @@ class Database:
             item_columns = {row["name"] for row in conn.execute("PRAGMA table_info(receipt_items)")}
             if "is_weight" not in item_columns:
                 conn.execute("ALTER TABLE receipt_items ADD COLUMN is_weight INTEGER NOT NULL DEFAULT 0")
+            self._merge_categories_clashing_with_defaults(conn)
             schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
 
         if schema_version < REPARSE_SCHEMA_VERSION:
@@ -135,6 +140,32 @@ class Database:
             self._translate_generated_names()
             with self.connect() as conn:
                 conn.execute(f"PRAGMA user_version = {ENGLISH_NAMES_SCHEMA_VERSION}")
+
+    @staticmethod
+    def _merge_categories_clashing_with_defaults(conn: sqlite3.Connection) -> None:
+        """
+        Migration (idempotent, runs on every start): custom categories saved before names were checked
+        are fixed in place. One named like a default ("Other", "прочее") is merged into that default,
+        a blank one into "Прочее", and an English label that repeats a default's is cleared.
+        """
+        defaults: dict[str, str] = {}
+        for name, name_en in DEFAULT_CATEGORY_LABELS_EN.items():
+            defaults[name.casefold()] = name
+            defaults[name_en.casefold()] = name
+        custom = [row["name"] for row in conn.execute("SELECT name FROM custom_categories")]
+        used = [row["category"] for row in conn.execute("SELECT DISTINCT category FROM item_catalog WHERE category != ''")]
+        for name in {*custom, *used}:
+            if name in DEFAULT_CATEGORY_LABELS_EN:
+                # A default saved as a custom row adds nothing but a label the UI ignores
+                conn.execute("DELETE FROM custom_categories WHERE name = ?", (name,))
+                continue
+            target = defaults.get(name.strip().casefold()) or ("Прочее" if not name.strip() else None)
+            if target:
+                conn.execute("UPDATE item_catalog SET category = ? WHERE category = ?", (target, name))
+                conn.execute("DELETE FROM custom_categories WHERE name = ?", (name,))
+        for row in conn.execute("SELECT name, name_en FROM custom_categories WHERE name_en != ''").fetchall():
+            if row["name_en"].strip().casefold() in defaults:
+                conn.execute("UPDATE custom_categories SET name_en = '' WHERE name = ?", (row["name"],))
 
     def _translate_generated_names(self) -> None:
         """Renames parser and fallback catalog rows from the old Russian names to the English ones."""
@@ -198,32 +229,30 @@ class Database:
     def get_all_categories(self) -> list[str]:
         """Returns the combined list of default and user-defined categories."""
         with self.connect() as conn:
-            rows = conn.execute("SELECT name FROM custom_categories ORDER BY name").fetchall()
-            used_rows = conn.execute("SELECT DISTINCT category FROM item_catalog WHERE category != ''").fetchall()
-
-        result = list(DEFAULT_CATEGORIES)
-        for r in rows:
-            if r["name"] not in result:
-                result.append(r["name"])
-        for r in used_rows:
-            if r["category"] not in result:
-                result.append(r["category"])
-        return result
+            return self._read_categories(conn)[0]
 
     @staticmethod
-    def _category_lookup(conn: sqlite3.Connection) -> dict[str, str]:
-        """Maps every category name and English label (casefolded) to the stored category name."""
+    def _read_categories(conn: sqlite3.Connection) -> tuple[list[str], dict[str, str]]:
+        """
+        Returns all categories (defaults, custom ones, then ones only used in item_catalog) and a lookup
+        from every casefolded category name and English label to the stored category name.
+        """
+        categories = list(DEFAULT_CATEGORIES)
         lookup: dict[str, str] = {}
         for name, name_en in DEFAULT_CATEGORY_LABELS_EN.items():
             lookup[name.casefold()] = name
             lookup[name_en.casefold()] = name
         for row in conn.execute("SELECT name, name_en FROM custom_categories ORDER BY name"):
+            if row["name"] not in categories:
+                categories.append(row["name"])
             lookup.setdefault(row["name"].casefold(), row["name"])
             if row["name_en"]:
                 lookup.setdefault(row["name_en"].casefold(), row["name"])
         for row in conn.execute("SELECT DISTINCT category FROM item_catalog WHERE category != ''"):
+            if row["category"] not in categories:
+                categories.append(row["category"])
             lookup.setdefault(row["category"].casefold(), row["category"])
-        return lookup
+        return categories, lookup
 
     def add_custom_category(self, name: str, name_en: str = "") -> list[str]:
         """
@@ -235,10 +264,10 @@ class Database:
         clean = name.strip()
         clean_en = name_en.strip()
         if not clean:
-            return self.get_all_categories()
+            raise _category_empty()
         now = datetime.now(UTC).isoformat()
         with self.connect() as conn:
-            lookup = self._category_lookup(conn)
+            categories, lookup = self._read_categories(conn)
             owner = lookup.get(clean.casefold())
             if owner in DEFAULT_CATEGORIES or (owner and owner.casefold() != clean.casefold()):
                 raise _category_reserved(clean)
@@ -252,7 +281,9 @@ class Database:
                 """,
                 (clean, clean_en, now),
             )
-        return self.get_all_categories()
+        if clean not in categories:
+            categories.append(clean)
+        return categories
 
     def get_category_labels_en(self) -> dict[str, str]:
         """English names of user-defined categories that have one."""
@@ -374,7 +405,9 @@ class Database:
             new_clean_name = clean_name.strip() if clean_name and clean_name.strip() else existing["clean_name"]
             # A typed "Other" or "pets" means the existing "Прочее" or "Питомцы", not a new category
             new_category = category.strip()
-            new_category = self._category_lookup(conn).get(new_category.casefold(), new_category)
+            if not new_category:
+                raise _category_empty()
+            new_category = self._read_categories(conn)[1].get(new_category.casefold(), new_category)
 
             conn.execute(
                 """
