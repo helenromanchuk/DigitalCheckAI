@@ -383,9 +383,14 @@ def test_custom_category_english_name_can_be_added_later(tmp_path: Path):
 
 def test_gemini_prompt_includes_store_weight_and_category_rules(tmp_path: Path, monkeypatch):
     import json
+    import re
     import types as pytypes
     from google import genai
-    from app.categorizer.gemini_classifier import SYSTEM_INSTRUCTION, _build_classification_prompt
+    from app.categorizer.gemini_classifier import (
+        SYSTEM_INSTRUCTION,
+        CategorizedItemSchema,
+        _build_classification_prompt,
+    )
 
     db = Database(tmp_path / "test_costco.db")
     captured: dict = {}
@@ -419,6 +424,9 @@ def test_gemini_prompt_includes_store_weight_and_category_rules(tmp_path: Path, 
     assert "Safeway" in prompt and "SWY-" in prompt
     assert "fl oz" in prompt
     assert "Master Case" in prompt
+    assert not re.search(r"[А-Яа-яЁё]", SYSTEM_INSTRUCTION)
+    assert not re.search(r"[А-Яа-яЁё]", json.dumps(CategorizedItemSchema.model_json_schema(), ensure_ascii=False))
+    assert not re.search(r"[А-Яа-яЁё]", _build_classification_prompt(batch, ["Pantry"]))
     for cat in categories:
         assert cat in prompt
 
