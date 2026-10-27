@@ -9,6 +9,9 @@ from typing import Any, Iterator
 from app.config import DB_PATH, DEFAULT_CATEGORIES
 from app.unit_price import add_unit_prices
 
+# PRAGMA user_version after the one-time re-parse of stored receipts (see init_db)
+REPARSE_SCHEMA_VERSION = 1
+
 
 class Database:
     """Manages the DigitalCheckAI SQLite database."""
@@ -107,24 +110,47 @@ class Database:
             item_columns = {row["name"] for row in conn.execute("PRAGMA table_info(receipt_items)")}
             if "is_weight" not in item_columns:
                 conn.execute("ALTER TABLE receipt_items ADD COLUMN is_weight INTEGER NOT NULL DEFAULT 0")
-            # Migration: fuel synced before the parser's category was trusted is still pending/fallback,
-            # so the classifier could move it out of the gas category. Lock it to the parser's category
-            conn.execute(
-                """
-                UPDATE item_catalog
-                SET category = 'Авто и заправка (Gas Station)',
-                    clean_name = 'Топливо Costco (' || raw_description || ')',
-                    classified_by = 'parser'
-                WHERE is_manual_override = 0
-                  AND classified_by IN ('pending', 'fallback')
-                  AND item_number IN (
-                      SELECT ri.item_number
-                      FROM receipt_items ri
-                      JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
-                      WHERE r.receipt_type = 'gas' AND ri.net_amount > 0
-                  )
-                """
-            )
+            schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
+
+        if schema_version < REPARSE_SCHEMA_VERSION:
+            # Migration: receipts stored by older parsers have wrong receipt types, coupon lines and
+            # parser categories (e.g. "REGULAR COFFEE" taken for fuel). Re-parse them from raw_json once
+            self.reparse_stored_receipts()
+            with self.connect() as conn:
+                conn.execute(f"PRAGMA user_version = {REPARSE_SCHEMA_VERSION}")
+
+    def reparse_stored_receipts(self) -> int:
+        """
+        Re-parses every stored receipt from its raw_json with the current parsers and saves it again,
+        which also fixes parser categories in item_catalog. Returns the number of re-parsed receipts.
+        """
+        # Imported here to keep the storage layer from loading the scrapers on every import
+        from app.scraper.parser import parse_online_order, parse_warehouse_or_gas_receipt
+        from app.scraper.safeway_client import parse_safeway_receipt
+
+        with self.connect() as conn:
+            rows = conn.execute("SELECT transaction_barcode, store, receipt_type, raw_json FROM receipts").fetchall()
+
+        reparsed: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                raw = json.loads(row["raw_json"] or "{}")
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(raw, dict) or not raw:
+                continue
+            if row["store"] == "safeway":
+                parsed = parse_safeway_receipt(raw)
+            elif row["receipt_type"] == "online":
+                parsed = parse_online_order(raw)
+            else:
+                parsed = parse_warehouse_or_gas_receipt(raw)
+            # Keep the stored receipt if raw_json can't be parsed into the same receipt with items
+            if parsed and parsed["transaction_barcode"] == row["transaction_barcode"] and parsed["items"]:
+                reparsed.append(parsed)
+
+        self.upsert_receipts(reparsed)
+        return len(reparsed)
 
     def get_all_categories(self) -> list[str]:
         """Returns the combined list of default and user-defined categories."""
@@ -411,15 +437,38 @@ class Database:
                         and cat_row["classified_by"] != "parser"
                     ):
                         # The row was created before the parser knew its category (e.g. fuel saved as pending):
-                        # take the parser's category so the classifier can't move it again
+                        # take the parser's category so the classifier can't move it again. A name decoded
+                        # by Gemini is kept: it reads better than the parser's template
                         conn.execute(
                             """
                             UPDATE item_catalog
-                            SET clean_name = ?, category = ?, classified_by = 'parser', updated_at = ?
+                            SET clean_name = CASE WHEN classified_by = 'gemini' THEN clean_name ELSE ? END,
+                                category = ?, classified_by = 'parser', updated_at = ?
                             WHERE item_number = ?
                             """,
                             (line.get("default_clean_name") or raw_desc, line["default_category"], now, item_num),
                         )
+                    elif (
+                        not line.get("default_category")
+                        and not cat_row["is_manual_override"]
+                        and cat_row["classified_by"] == "parser"
+                    ):
+                        # An older parser gave this item a category (e.g. "REGULAR COFFEE" as fuel) that the
+                        # current one doesn't: unlock the row and send it to the classifier again
+                        conn.execute(
+                            """
+                            UPDATE item_catalog
+                            SET clean_name = ?, category = 'Прочее', classified_by = 'pending', updated_at = ?
+                            WHERE item_number = ?
+                            """,
+                            (raw_desc, now, item_num),
+                        )
+                        new_items_for_catalog[item_num] = {
+                            "item_number": item_num,
+                            "raw_description": raw_desc,
+                            "sample_unit_price": float(line.get("unit_price", 0.0)),
+                            "receipt_type": receipt.get("receipt_type", "warehouse"),
+                        }
 
                     if line.get("image_url"):
                         conn.execute(

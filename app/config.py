@@ -15,6 +15,8 @@ BROWSER_PROFILE_DIR = DATA_DIR / "browser_profile"
 IMAGES_DIR = DATA_DIR / "images"
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
+FUEL_CATEGORY = "Авто и заправка (Gas Station)"
+
 DEFAULT_CATEGORIES: list[str] = [
     "Мясо, птица и морепродукты",
     "Овощи, фрукты и ягоды",
@@ -28,7 +30,7 @@ DEFAULT_CATEGORIES: list[str] = [
     "Товары для дома, кухни и сада",
     "Одежда и обувь",
     "Электроника и техника",
-    "Авто и заправка (Gas Station)",
+    FUEL_CATEGORY,
     "Алкоголь",
     "Прочее",
 ]

@@ -158,7 +158,11 @@ def test_fallback_prefers_exact_names_and_specific_keywords():
     assert category("APPLE AIRPODS MAX") == "Электроника и техника"
     # No substring hits inside other words
     assert category("PRICE MATCH ADJ") == "Прочее"
-    assert category("PANCAKE MIX") == "Прочее"
+    # A keyword at the end of a compound names the thing; plurals of short keywords match
+    assert category("PINEAPPLE CHUNKS") == "Овощи, фрукты и ягоды"
+    assert category("CHEESECAKE") == "Выпечка, хлеб и готовая еда (Deli)"
+    assert category("FLATBREAD") == "Выпечка, хлеб и готовая еда (Deli)"
+    assert category("FRY PANS 2PK") == "Товары для дома, кухни и сада"
     assert category("TVORT CHEESE") == "Молочные продукты, сыр и яйца"
     # Prefix keywords still work
     assert category("ORG STRAWBERRIES 2LB") == "Овощи, фрукты и ягоды"
@@ -207,6 +211,7 @@ def test_existing_pending_fuel_and_orphan_rows_are_not_sent_to_classifier(tmp_pa
             VALUES ('FEE1', 'DELIVERY FEE', 'DELIVERY FEE', 'Прочее', 0, 'pending', '2026-10-01')
             """
         )
+        conn.execute("PRAGMA user_version = 0")
 
     db.init_db()
 
@@ -268,3 +273,67 @@ def test_gemini_item_numbers_differing_by_leading_zeros_are_not_matched_loosely(
     results = GeminiItemClassifier(db)._call_gemini_batch(batch, db.get_all_categories(), "key")
 
     assert [(r["item_number"], r["clean_name"]) for r in results] == [("123", "Exact")]
+
+
+def test_migration_unlocks_groceries_an_old_parser_took_for_fuel(tmp_path: Path):
+    db = Database(tmp_path / "test_costco.db")
+    db.upsert_receipts(
+        parse_any_costco_payload(
+            {
+                "transactionBarcode": "R-OLD-GAS",
+                "transactionDate": "2026-10-01",
+                "documentType": "WarehouseReceiptDetail",
+                "itemArray": [
+                    {"itemNumber": "1000001", "itemDescription01": "REGULAR COFFEE", "unit": 1, "amount": 14.99},
+                    {"itemNumber": "1000002", "itemDescription01": "MILK", "unit": 1, "amount": 4.59},
+                ],
+            }
+        )
+    )
+    with db.connect() as conn:
+        # What the old parser and the old startup migration left behind
+        conn.execute("UPDATE receipts SET receipt_type = 'gas' WHERE transaction_barcode = 'R-OLD-GAS'")
+        conn.execute(
+            "UPDATE item_catalog SET category = 'Авто и заправка (Gas Station)', clean_name = 'Топливо Costco (x)', "
+            "classified_by = 'parser'"
+        )
+        conn.execute("PRAGMA user_version = 0")
+
+    db.init_db()
+
+    with db.connect() as conn:
+        receipt_type = conn.execute("SELECT receipt_type FROM receipts").fetchone()["receipt_type"]
+        rows = conn.execute("SELECT category, classified_by FROM item_catalog").fetchall()
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+    assert receipt_type == "warehouse"
+    assert {(r["category"], r["classified_by"]) for r in rows} == {("Прочее", "pending")}
+    assert {i["item_number"] for i in db.get_pending_items_for_gemini()} == {"1000001", "1000002"}
+    assert version == 1
+
+
+def test_unmatched_coupon_does_not_overwrite_product_with_same_number(tmp_path: Path):
+    db = Database(tmp_path / "test_costco.db")
+    db.save_categorized_items(
+        [{"item_number": "1234567", "raw_description": "KS EVOO", "clean_name": "Olive Oil",
+          "category": "Бакалея, масла, специи и консервы"}]
+    )
+
+    db.upsert_receipts(
+        parse_any_costco_payload(
+            {
+                "transactionBarcode": "R-CPN",
+                "transactionDate": "2026-10-01",
+                "documentType": "WarehouseReceiptDetail",
+                "itemArray": [
+                    {"itemNumber": "111", "itemDescription01": "MILK", "unit": 1, "amount": 5.0},
+                    {"itemNumber": "1234567", "itemDescription01": "/ 222", "unit": 1, "amount": -2.0},
+                ],
+            }
+        )
+    )
+
+    with db.connect() as conn:
+        row = conn.execute("SELECT clean_name, category FROM item_catalog WHERE item_number = '1234567'").fetchone()
+        coupon = conn.execute("SELECT classified_by FROM item_catalog WHERE item_number = 'DISCOUNT-222'").fetchone()
+    assert (row["clean_name"], row["category"]) == ("Olive Oil", "Бакалея, масла, специи и консервы")
+    assert coupon["classified_by"] == "parser"

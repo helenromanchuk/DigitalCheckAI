@@ -11,7 +11,7 @@ import logging
 import time
 from typing import Any
 
-from app.config import BROWSER_PROFILE_DIR
+from app.config import BROWSER_PROFILE_DIR, FUEL_CATEGORY
 from app.scraper.costco_client import _sync_lock
 from app.scraper.parser import spread_discount
 
@@ -113,7 +113,7 @@ def parse_safeway_receipt(raw: dict[str, Any]) -> dict[str, Any] | None:
             "is_weight": bool(line.get("weightItem")) and not line.get("isFuel"),
         }
         if line.get("isFuel"):
-            item["default_category"] = "Авто и заправка (Gas Station)"
+            item["default_category"] = FUEL_CATEGORY
         bpn = str(line.get("bpn") or "").strip()
         if bpn:
             item["image_url"] = SAFEWAY_IMAGE_URL.format(bpn=bpn)

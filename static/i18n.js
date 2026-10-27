@@ -130,6 +130,8 @@ const I18N = {
     "items.editNameTitle": "Нажмите, чтобы отредактировать расшифрованное название",
     "source.dictionary": "Словарь",
     "source.manual": "Вручную",
+    "source.receipt": "Из чека",
+    "source.receiptTitle": "Категория определена по самому чеку (топливо, купон), Gemini её не меняет",
 
     "receipts.notFound": "Чеки за выбранный период не найдены.",
     "receipts.discount": "Скидка: -{amount}",
@@ -311,6 +313,8 @@ const I18N = {
     "items.editNameTitle": "Click to edit the decoded name",
     "source.dictionary": "Dictionary",
     "source.manual": "Manual",
+    "source.receipt": "From receipt",
+    "source.receiptTitle": "Category comes from the receipt itself (fuel, coupon); Gemini doesn't change it",
 
     "receipts.notFound": "No receipts for the selected period.",
     "receipts.discount": "Discount: -{amount}",

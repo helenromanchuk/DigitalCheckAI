@@ -177,7 +177,7 @@ def test_unmatched_coupon_stays_separate_line():
     r = parse_any_costco_payload([receipt])[0]
     items = {i["item_number"]: i for i in r["items"]}
     assert items["222"]["net_amount"] == 1.99
-    assert items["387027"]["net_amount"] == -3.00
+    assert items["DISCOUNT-9999999"]["net_amount"] == -3.00
     assert round(sum(i["net_amount"] for i in r["items"]), 2) == -1.01
 
 
@@ -246,11 +246,14 @@ def test_unmatched_coupon_counts_as_savings_with_negative_quantity():
     }
 
     r = parse_any_costco_payload([receipt])[0]
-    coupon = next(i for i in r["items"] if i["item_number"] == "999")
+    # Keyed by the coupon's target, not by its own itemNumber, which may be a real product number
+    coupon = next(i for i in r["items"] if i["item_number"] == "DISCOUNT-222")
     assert r["instant_savings"] == 2.0
     assert r["subtotal"] == 3.0
     assert coupon["quantity"] == -1.0
-    assert coupon["net_amount"] == -2.0
+    # A discount, not negative spend: item-level discounts add up to the receipt's savings
+    assert (coupon["gross_amount"], coupon["discount_amount"], coupon["net_amount"]) == (0.0, 2.0, -2.0)
+    assert sum(i["discount_amount"] for i in r["items"]) == r["instant_savings"]
     assert coupon["default_category"] == "Прочее"
 
 
@@ -296,3 +299,47 @@ def test_spread_discount_gives_rounding_remainder_to_last_item():
     assert spread_discount(items, 1.0, "gross_amount") == 1.0
     assert [i["discount_amount"] for i in items] == [0.33, 0.33, 0.34, 0.0]
     assert [i["net_amount"] for i in items] == [9.67, 9.67, 9.66, -5.0]
+
+
+def test_keyword_line_on_mixed_receipt_keeps_its_quantity():
+    receipt = {
+        "transactionBarcode": "R-DEF-MARKDOWN",
+        "transactionDateTime": "2026-10-26T12:00:00",
+        "itemArray": [
+            {"itemNumber": "555", "itemDescription01": "KS DIESEL EXHAUST FLUID", "unit": 1, "amount": 9.99,
+             "itemUnitPriceAmount": 12.99},
+            {"itemNumber": "111", "itemDescription01": "MILK", "unit": 1, "amount": 4.59},
+        ],
+    }
+
+    r = parse_any_costco_payload([receipt])[0]
+    assert next(i for i in r["items"] if i["item_number"] == "555")["quantity"] == 1.0
+
+
+def test_keyword_fuel_receipt_of_unknown_type_gets_gallons():
+    receipt = {
+        "transactionBarcode": "GAS-GALLONS",
+        "transactionDateTime": "2026-10-26T12:00:00",
+        "itemArray": [{"itemNumber": "800877", "itemDescription01": "UNLEADED", "unit": 1, "amount": 44.62,
+                       "itemUnitPriceAmount": 5.659}],
+    }
+
+    r = parse_any_costco_payload([receipt])[0]
+    assert r["items"][0]["quantity"] == 7.885
+
+
+def test_order_discount_spread_by_amount_after_line_discounts():
+    order = {
+        "orderNumber": "ORD-NET",
+        "orderPlacedDate": "2026-10-26",
+        "discountAmount": 70,
+        "orderLineItems": [
+            {"itemNumber": "A1", "itemDescription": "FREE ITEM", "unitPrice": 50, "quantity": 1,
+             "merchandiseTotal": 50, "discountAmount": 50},
+            {"itemNumber": "B2", "itemDescription": "PAID ITEM", "unitPrice": 50, "quantity": 1, "merchandiseTotal": 50},
+        ],
+    }
+
+    items = {i["item_number"]: i for i in parse_any_costco_payload([order])[0]["items"]}
+    assert items["A1"]["net_amount"] == 0.0
+    assert items["B2"]["net_amount"] == 30.0

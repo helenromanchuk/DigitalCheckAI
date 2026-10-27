@@ -5,7 +5,7 @@ import re
 from typing import Any
 from pydantic import BaseModel, Field
 
-from app.config import DEFAULT_CATEGORIES, get_gemini_api_key, get_gemini_model
+from app.config import DEFAULT_CATEGORIES, FUEL_CATEGORY, get_gemini_api_key, get_gemini_model
 from app.database import Database
 
 logger = logging.getLogger(__name__)
@@ -29,7 +29,7 @@ class CategorizedBatchSchema(BaseModel):
 FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
     (
         ["UNLEADED", "GASOLINE", "FUEL", "DIESEL"],
-        "Авто и заправка (Gas Station)",
+        FUEL_CATEGORY,
         {"UNLEADED GASOLINE 87": "Бензин Regular Unleaded 87 (Costco Gas)"},
     ),
     (
@@ -126,16 +126,30 @@ FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
 ]
 
 
-def _keyword_matches(keyword: str, words: list[str], text: str) -> bool:
+# A keyword at the end of a compound word ("PINEAPPLE", "CHEESECAKE") needs at least this many letters
+# before it, so "RICE" doesn't match inside "PRICE"
+MIN_COMPOUND_HEAD = 3
+
+
+def _keyword_match_rank(keyword: str, words: list[str], text: str) -> int:
     """
-    Multi-word keywords match as a phrase; short ones (up to 3 letters, e.g. "TV", "PAN") only as a
-    whole word; longer ones as a word prefix ("STRAWBERR" -> "STRAWBERRIES", but "RICE" not in "PRICE").
+    How well a keyword matches: 0 = no match, 1 = word prefix, 2 = whole word, phrase or end of a compound.
+    Multi-word keywords match as a phrase; short ones (up to 3 letters, e.g. "TV", "PAN") only as a whole
+    word or its plural ("PANS"); longer ones as a word prefix ("STRAWBERR" -> "STRAWBERRIES") or as the end
+    of a compound word. In English compounds the last part names the thing ("CHEESECAKE" is a cake),
+    so an ending match outranks a prefix match.
     """
     if " " in keyword:
-        return re.search(rf"\b{re.escape(keyword)}", text) is not None
+        return 2 if re.search(rf"\b{re.escape(keyword)}", text) else 0
     if len(keyword) <= 3:
-        return keyword in words
-    return any(word.startswith(keyword) for word in words)
+        return 2 if keyword in words or f"{keyword}S" in words else 0
+    rank = 0
+    for word in words:
+        if word == keyword or (word.endswith(keyword) and len(word) - len(keyword) >= MIN_COMPOUND_HEAD):
+            return 2
+        if word.startswith(keyword):
+            rank = 1
+    return rank
 
 
 def fallback_categorize_item(item_number: str, raw_description: str) -> dict[str, str]:
@@ -153,13 +167,15 @@ def fallback_categorize_item(item_number: str, raw_description: str) -> dict[str
         if upper in exact_map:
             return {**result, "clean_name": exact_map[upper], "category": category}
 
-    # Among keyword hits the longest keyword wins: "AIRPODS" is more specific than "APPLE"
+    # Among keyword hits the best match wins (see _keyword_match_rank), then the longest keyword:
+    # "AIRPODS" is more specific than "APPLE"
     words = re.findall(r"[A-Z0-9]+", upper)
-    best_len = 0
+    best: tuple[int, int] = (0, 0)
     for keywords, category, _ in FALLBACK_RULES:
         for kw in keywords:
-            if len(kw) > best_len and _keyword_matches(kw, words, upper):
-                best_len = len(kw)
+            rank = _keyword_match_rank(kw, words, upper)
+            if rank and (rank, len(kw)) > best:
+                best = (rank, len(kw))
                 result["category"] = category
     return result
 

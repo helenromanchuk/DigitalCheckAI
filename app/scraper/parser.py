@@ -2,6 +2,8 @@
 import re
 from typing import Any
 
+from app.config import FUEL_CATEGORY
+
 
 # A coupon's reference to its item on a Costco receipt: "TPD/1234567", "/1234567", "/ 1234567" or "#1234567".
 # Only at the start of the description; otherwise a return like "KS TOWEL 12/120CT" is taken for a coupon.
@@ -88,7 +90,7 @@ def spread_discount(items: list[dict[str, Any]], amount: float, base_key: str) -
 
 
 def _mark_fuel(item_entry: dict[str, Any]) -> None:
-    item_entry["default_category"] = "Авто и заправка (Gas Station)"
+    item_entry["default_category"] = FUEL_CATEGORY
     item_entry["default_clean_name"] = f"Топливо Costco ({item_entry['raw_description']})"
 
 
@@ -126,8 +128,9 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
     raw_items = raw_receipt.get("itemArray") or raw_receipt.get("items") or []
     normalized_items: list[dict[str, Any]] = []
     pending_discounts: list[tuple[str | None, float, dict[str, Any]]] = []
-    # Lines that look like fuel only by a keyword on a receipt of unknown type, and how many lines don't
-    keyword_fuel_items: list[dict[str, Any]] = []
+    # Lines that look like fuel only by a keyword on a receipt of unknown type (with their amount and
+    # raw unit price), and how many lines don't
+    keyword_fuel_items: list[tuple[dict[str, Any], float, float]] = []
     non_fuel_lines = 0
 
     for raw_item in raw_items:
@@ -168,7 +171,6 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
         is_keyword_fuel = (
             not is_explicit_fuel and not is_warehouse_doc and bool(GAS_KEYWORDS_RE.search(upper_desc))
         )
-        is_fuel_line = is_explicit_fuel or is_keyword_fuel
         if is_explicit_fuel:
             is_gas = True
 
@@ -180,7 +182,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
             abs(qty) == 1
             and unit_price > 0
             and abs(abs(amount) - unit_price) > 0.01
-            and (is_fuel_line or raw_item.get("itemDepartmentNumber") in WEIGHT_DEPARTMENTS)
+            and (is_explicit_fuel or raw_item.get("itemDepartmentNumber") in WEIGHT_DEPARTMENTS)
         ):
             # Sold by weight (or fuel): unit is 1 and the price is per pound/gallon.
             # In other departments this mismatch is a markdown, not a weight.
@@ -197,20 +199,23 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
             "net_amount": round(amount, 2),
             "tax_flag": str(raw_item.get("taxFlag") or ""),
             # Fuel is sold in gallons, not pounds
-            "is_weight": sold_by_measure and not is_fuel_line,
+            "is_weight": sold_by_measure and not is_explicit_fuel,
         }
         if is_explicit_fuel:
             _mark_fuel(item_entry)
         elif is_keyword_fuel:
-            keyword_fuel_items.append(item_entry)
+            keyword_fuel_items.append((item_entry, amount, unit_price))
         else:
             non_fuel_lines += 1
 
         normalized_items.append(item_entry)
 
     if keyword_fuel_items and non_fuel_lines == 0:
-        for item_entry in keyword_fuel_items:
+        for item_entry, amount, unit_price in keyword_fuel_items:
             _mark_fuel(item_entry)
+            # Only now is it known to be fuel: unit 1 with a per-gallon price means the quantity is in gallons
+            if abs(item_entry["quantity"]) == 1 and unit_price > 0 and abs(abs(amount) - unit_price) > 0.01:
+                item_entry["quantity"] = round(amount / unit_price, 3)
         is_gas = True
 
     # Apply discounts to their items
@@ -222,28 +227,30 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
                 (i for i in reversed(normalized_items) if i["item_number"] == target_num and i["gross_amount"] > 0),
                 None,
             )
-        # Count every coupon as savings, including one kept as its own line below
+        # Count every coupon as savings, including one kept as its own discount line below
         total_discounts_applied = round(total_discounts_applied + disc_val, 2)
         if target is not None:
             target["discount_amount"] = round(target["discount_amount"] + disc_val, 2)
             target["net_amount"] = round(target["gross_amount"] - target["discount_amount"], 2)
             continue
-        # The coupon's item isn't on the receipt: don't attach it to an arbitrary item,
-        # keep it as a separate negative line (it may also be a return). Its category is unknown, so it
-        # goes to "Прочее" as a parser row and isn't sent to the classifier
-        item_number = str(raw_item.get("itemNumber") or "").strip() or f"DISCOUNT-{target_num or 'UNKNOWN'}"
-        desc = str(raw_item.get("itemDescription01") or "").strip() or f"DISCOUNT #{item_number}"
-        amount = -disc_val
+        # The coupon's item isn't on the receipt: don't attach it to an arbitrary item, keep it as
+        # a separate discount line (gross 0, so the discount shows up as savings, not as spend).
+        # Its category is unknown, so it goes to "Прочее" as a parser row and isn't sent to the classifier.
+        # The DISCOUNT- prefix keeps it from colliding with a real product's catalog row: the coupon row's
+        # own itemNumber may be a product number
+        coupon_ref = target_num or str(raw_item.get("itemNumber") or "").strip() or "UNKNOWN"
+        item_number = f"DISCOUNT-{coupon_ref}"
+        desc = str(raw_item.get("itemDescription01") or "").strip() or f"DISCOUNT #{coupon_ref}"
         normalized_items.append(
             {
                 "item_number": item_number,
                 "raw_description": desc,
-                # Coupon rows carry unit=1; the line is a negative amount, so its quantity is negative too
+                # Coupon rows carry unit=1; the line takes money off, so its quantity is negative
                 "quantity": -abs(round(_to_float(raw_item.get("unit"), 1.0) or 1.0, 3)),
-                "unit_price": disc_val,
-                "gross_amount": amount,
-                "discount_amount": 0.0,
-                "net_amount": amount,
+                "unit_price": 0.0,
+                "gross_amount": 0.0,
+                "discount_amount": disc_val,
+                "net_amount": -disc_val,
                 "tax_flag": str(raw_item.get("taxFlag") or ""),
                 "is_weight": False,
                 "default_category": "Прочее",
@@ -361,7 +368,8 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
     # in proportion to their amounts so category stats reflect what was actually paid
     order_discount = abs(_to_float(raw_order.get("discountAmount"), 0.0))
     unallocated = round(order_discount - total_discount, 2)
-    allocated = spread_discount(normalized_items, unallocated, "gross_amount")
+    # Spread by the amount after line discounts, so an already discounted line can't go negative
+    allocated = spread_discount(normalized_items, unallocated, "net_amount")
     total_discount = round(total_discount + allocated, 2)
 
     subtotal = _to_float(raw_order.get("merchandiseTotal") or raw_order.get("subTotal") or raw_order.get("subtotal"), 0.0)

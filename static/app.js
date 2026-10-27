@@ -414,8 +414,8 @@ function renderStats(data) {
   }
 
   const typeCounts = currentStore === "costco" ? { warehouse: 0, gas: 0, online: 0 } : {};
-  for (const t of data.by_type || []) {
-    typeCounts[t.receipt_type] = t.count;
+  for (const row of data.by_type || []) {
+    typeCounts[row.receipt_type] = row.count;
   }
   document.getElementById("kpiReceiptTypes").textContent = Object.entries(typeCounts)
     .map(([type, count]) => `${receiptTypeLabel(type)}: ${count || 0}`)
@@ -593,6 +593,9 @@ function renderItemsTable(data) {
       badgeHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-100 text-purple-700">${escapeHtml(t("source.manual"))}</span>`;
     } else if (item.classified_by === "gemini") {
       badgeHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-700">Gemini AI</span>`;
+    } else if (item.classified_by === "parser") {
+      // The category comes from the receipt itself (fuel, coupon) and Gemini doesn't reclassify it
+      badgeHtml = `<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-sky-100 text-sky-700" title="${escapeHtml(t("source.receiptTitle"))}">${escapeHtml(t("source.receipt"))}</span>`;
     }
 
     const optionsHtml = availableCategories.map(cat => {
