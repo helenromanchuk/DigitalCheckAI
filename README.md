@@ -78,6 +78,17 @@ python -m venv .venv
 
 Then open **http://localhost:8000** in your browser.
 
+### Access from another computer on the local network
+Run **`run.bat lan`**. The server listens on all network interfaces (`--host 0.0.0.0`, without `--reload`) and prints the addresses to open on other computers, e.g. `http://192.168.1.20:8000`. If the page does not open, allow port 8000 in Windows Firewall once (as administrator):
+
+```powershell
+netsh advfirewall firewall add rule name="DigitalCheckAI" dir=in action=allow protocol=TCP localport=8000 profile=private
+```
+
+Limitations:
+- The app has no authentication: anyone on the network can view purchases, run syncs and change the Gemini key. Use it only on a trusted home network and do not expose the port to the internet.
+- Sync (`/api/sync`, `/api/sync/safeway`) opens the store sign-in window on the **server** computer. Remote users should run the export scripts from `static/export/` in their own browser and upload the JSON with the import button.
+
 ## Gemini API key
 1. Click **"Указать ключ Gemini API"** ("Set Gemini API key") in the top right corner of the dashboard, or set `GEMINI_API_KEY=...` in the `.env` file.
 2. The key is stored locally in `.env`.
