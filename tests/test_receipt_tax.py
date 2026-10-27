@@ -141,3 +141,58 @@ def test_crv_is_parsed_into_other_and_kept_out_of_search_and_gemini(tmp_path):
     (receipt_row,) = db.get_receipts_list()
     (wine,) = receipt_row["items"]
     assert wine["tax_crv"] == 0.61
+
+
+def test_online_order_tax_is_split_only_for_a_single_item():
+    from app.scraper.parser import parse_online_order
+
+    def order(*lines):
+        return {
+            "orderNumber": "1265538995",
+            "orderPlacedDate": "2026-02-20T09:41:21",
+            "orderTax": 6.07,
+            "orderLineItems": [
+                {"itemNumber": num, "itemDescription": num, "quantity": 1, "merchandiseTotal": amount}
+                for num, amount in lines
+            ],
+        }
+
+    (single,) = parse_online_order(order(("1", 64.94)))["items"]
+    assert single["tax_flag"] == "Y"
+    several = parse_online_order(order(("1", 50.0), ("2", 14.94)))["items"]
+    assert [i["tax_flag"] for i in several] == ["", ""]
+
+
+def test_upgrade_reparses_so_pending_crv_rows_leave_the_gemini_queue(tmp_path):
+    import sqlite3
+
+    from app.database import CRV_SCHEMA_VERSION, ENGLISH_NAMES_SCHEMA_VERSION, Database
+    from app.scraper.parser import parse_any_costco_payload
+
+    path = tmp_path / "upgrade.db"
+    db = Database(path)
+    db.init_db()
+    receipt = {
+        "transactionBarcode": "21126701000062606120934",
+        "transactionDate": "2026-06-12",
+        "receiptType": "In-Warehouse",
+        "warehouseName": "SAN JOSE #148",
+        "subTotal": 5.09,
+        "taxes": 0.51,
+        "total": 5.60,
+        "itemArray": [
+            {"itemNumber": "919140", "itemDescription01": "MILESTONE", "unit": 1, "amount": 4.99, "taxFlag": "Y"},
+            {"itemNumber": "1254", "itemDescription01": "CA REDEMP VAL T EI/919140", "unit": 1, "amount": 0.1},
+        ],
+    }
+    db.upsert_receipts(parse_any_costco_payload([receipt]))
+    # A database from before this change: the CRV row is waiting for Gemini
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE item_catalog SET classified_by = 'pending' WHERE item_number = '1254'")
+        conn.execute(f"PRAGMA user_version = {ENGLISH_NAMES_SCHEMA_VERSION}")
+    assert "1254" in [i["item_number"] for i in db.get_pending_items_for_gemini()]
+
+    db.init_db()
+    assert "1254" not in [i["item_number"] for i in db.get_pending_items_for_gemini()]
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == CRV_SCHEMA_VERSION

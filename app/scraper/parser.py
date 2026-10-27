@@ -370,9 +370,14 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
                 "gross_amount": round(gross, 2),
                 "discount_amount": round(disc, 2),
                 "net_amount": net,
-                "tax_flag": "Y",
+                "tax_flag": "",
             }
         )
+
+    # getOrderDetails has no per-line tax flag, only the order's tax. With a single item that tax is all its own;
+    # with several it can't be told which are taxable (groceries aren't), so the tax isn't split per item
+    if len(normalized_items) == 1:
+        normalized_items[0]["tax_flag"] = "Y"
 
     # getOrderDetails only returns the discount at the order level; spread it across items
     # in proportion to their amounts so category stats reflect what was actually paid

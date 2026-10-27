@@ -25,6 +25,7 @@ from app.unit_price import add_unit_prices
 # PRAGMA user_version after each one-time data migration (see init_db)
 REPARSE_SCHEMA_VERSION = 1
 ENGLISH_NAMES_SCHEMA_VERSION = 2
+CRV_SCHEMA_VERSION = 3
 
 
 def _category_reserved(value: str) -> AppError:
@@ -167,6 +168,15 @@ class Database:
             self._translate_generated_names()
             with self.connect() as conn:
                 conn.execute(f"PRAGMA user_version = {ENGLISH_NAMES_SCHEMA_VERSION}")
+
+        if schema_version < CRV_SCHEMA_VERSION:
+            # Migration: CRV catalog rows now get a parser category instead of going to Gemini, and online
+            # orders with several items no longer mark every line taxable. Re-parse once, unless the
+            # re-parse above already ran with the current parsers
+            if schema_version >= REPARSE_SCHEMA_VERSION:
+                self.reparse_stored_receipts()
+            with self.connect() as conn:
+                conn.execute(f"PRAGMA user_version = {CRV_SCHEMA_VERSION}")
 
     @classmethod
     def _link_crv_lines(cls, conn: sqlite3.Connection) -> None:
