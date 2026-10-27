@@ -16,6 +16,55 @@ A local web app that downloads receipts and orders from **costco.com** and **saf
   2. The result is stored in the local SQLite database (`data/costco.db` -> `item_catalog` table). Later purchases of the same `Item #` read it from the local database without calling Gemini again.
   3. You can **change any item's category or name by hand** at any time, right in the dashboard table, and the statistics for all receipts update immediately.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    UI["Dashboard<br/>static/index.html, app.js, i18n.js"]
+
+    subgraph Server["FastAPI server (app/)"]
+        API["REST API<br/>api/routes.py"]
+        COSTCO["Costco client<br/>scraper/costco_client.py"]
+        SAFEWAY["Safeway client<br/>scraper/safeway_client.py"]
+        PARSER["Receipt parsers<br/>scraper/parser.py,<br/>parse_safeway_receipt"]
+        CLS["Item classifier<br/>categorizer/gemini_classifier.py"]
+        IMG["Image downloader<br/>scraper/images.py"]
+        DB[("SQLite data/costco.db<br/>receipts, receipt_items,<br/>item_catalog")]
+    end
+
+    subgraph Browser["Playwright Chromium (persistent profile)"]
+        CPAGE["costco.com page<br/>in-page XHR (Kasada)"]
+        SPAGE["safeway.com page<br/>/order-account/api/instore"]
+    end
+
+    GEMINI["Gemini API"]
+    JSON["JSON export<br/>static/export/*.js"]
+
+    UI -- "/api/sync, /api/sync/safeway" --> API
+    UI -- "/api/import" --> API
+    JSON -. "file uploaded in UI" .-> UI
+    UI -- "/api/stats, /api/items, /api/receipts, /api/search" --> API
+
+    API --> COSTCO --> CPAGE
+    API --> SAFEWAY --> SPAGE
+    COSTCO --> PARSER
+    SAFEWAY --> PARSER
+    API -- "import" --> PARSER
+    PARSER -- "normalized receipts" --> DB
+    API -- "new Item #s" --> CLS
+    CLS -- "batch of raw names" --> GEMINI
+    CLS -- "clean names + categories<br/>(keyword fallback without a key<br/>or on API error)" --> DB
+    API -- "after Safeway sync / import" --> IMG -- "data/images" --> DB
+    API -- "aggregations" --> DB
+```
+
+**Sync flow**
+1. The dashboard calls `/api/sync` (Costco) or `/api/sync/safeway`. The client opens Chromium with a saved profile, waits for you to sign in, and fetches data from inside the store's page: Costco's orders API only accepts XHRs that carry Kasada headers added by its in-page script; Safeway's in-store API takes the session token from `window.AB.userInfo`.
+2. `parser.py` (Costco) and `parse_safeway_receipt` (Safeway) normalize receipts into one format: coupons are attached to their items, weights and fuel volumes are computed, and fuel lines get the gas category up front.
+3. `Database.upsert_receipts` stores receipts and lines and adds new `Item #`s to `item_catalog`. Items whose category the parser already knows (fuel, unmatched coupons) are marked `parser` and skip classification.
+4. The classifier sends only new items to Gemini in batches (or uses a keyword fallback when no key is set or the API call fails). Manual edits (`is_manual_override`) are never overwritten.
+5. After a Safeway sync or a JSON import, product images are downloaded to `data/images`. Statistics, search and membership analytics are SQL aggregations over the local database.
+
 ## Quick start (Windows)
 
 Double-click **`run.bat`** or run in a terminal:
