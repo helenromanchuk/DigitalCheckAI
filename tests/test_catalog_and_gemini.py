@@ -379,3 +379,49 @@ def test_custom_category_english_name_can_be_added_later(tmp_path: Path):
 
     assert db.get_category_labels_en() == {"Питомцы": "Pets"}
     assert db.get_all_categories().count("Питомцы") == 1
+
+
+def test_gemini_prompt_includes_store_weight_and_category_rules(tmp_path: Path, monkeypatch):
+    import json
+    import types as pytypes
+    from google import genai
+    from app.categorizer.gemini_classifier import SYSTEM_INSTRUCTION, _build_classification_prompt
+
+    db = Database(tmp_path / "test_costco.db")
+    captured: dict = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            def gen(**kw):
+                captured.update(kw)
+                return pytypes.SimpleNamespace(
+                    text=json.dumps(
+                        {
+                            "items": [
+                                {
+                                    "item_number": "SWY-123",
+                                    "clean_name": "O Organics Broth (32 fl oz)",
+                                    "category": "Бакалея, масла, специи и консервы",
+                                }
+                            ]
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+
+            self.models = pytypes.SimpleNamespace(generate_content=gen)
+
+    monkeypatch.setattr(genai, "Client", FakeClient)
+    categories = db.get_all_categories()
+    batch = [{"item_number": "SWY-123", "raw_description": "O ORGNC BROTH 32OZ", "sample_unit_price": 3.49}]
+    prompt = _build_classification_prompt(batch, categories)
+
+    assert "Safeway" in prompt and "SWY-" in prompt
+    assert "fl oz" in prompt
+    assert "Master Case" in prompt
+    for cat in categories:
+        assert cat in prompt
+
+    GeminiItemClassifier(db)._call_gemini_batch(batch, categories, "key")
+    assert captured["config"].system_instruction == SYSTEM_INSTRUCTION
+    assert "SWY-123" in captured["contents"]
