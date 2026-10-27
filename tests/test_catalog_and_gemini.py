@@ -671,6 +671,14 @@ def test_config_api_serves_category_labels_and_reserves_default_names(tmp_path: 
         labels = client.get("/api/config").json()["category_labels_en"]
         assert labels["Прочее"] == "Other"
         assert "Вино" not in labels
+
+        # Re-entering a custom category to change its translation is allowed,
+        # but another category can't take its English label or name
+        assert client.post("/api/categories", json={"name": "Питомцы", "name_en": "Pet supplies"}).status_code == 200
+        for payload in ({"name": "Зоотовары", "name_en": "pet supplies"}, {"name": "Pet Supplies"}):
+            res = client.post("/api/categories", json=payload)
+            assert res.status_code == 400, payload
+            assert res.json()["detail"]["code"] == "category_reserved"
     finally:
         app.dependency_overrides.clear()
 
@@ -749,3 +757,25 @@ def test_gemini_setup_failure_falls_back_once(tmp_path: Path, monkeypatch):
 
     assert client_calls == ["test-key-123"]
     assert result["provider"] == "fallback"
+
+
+def test_custom_categories_clashing_with_defaults_are_not_sent_to_gemini():
+    from app.categorizer.gemini_classifier import _categories_for_gemini
+
+    categories = ["Прочее", "Алкоголь", "Other", "Вино", "Питомцы"]
+    labels = {"Вино": "Alcohol", "Питомцы": "Pets"}
+    assert _categories_for_gemini(categories, labels) == ["Прочее", "Алкоголь", "Питомцы"]
+
+
+def test_duplicate_gemini_ids_are_logged(tmp_path: Path, caplog):
+    db = Database(tmp_path / "test_costco.db")
+    answer = {
+        "items": [
+            {"id": 0, "item_number": "1234", "clean_name": "First", "category": "Прочее"},
+            {"id": 0, "item_number": "1234", "clean_name": "Second", "category": "Алкоголь"},
+        ]
+    }
+    batch = [{"item_number": "1234", "raw_description": "KS ORG EVOO"}]
+    results = GeminiItemClassifier(db)._call_gemini_batch(batch, db.get_all_categories(), _fake_gemini_client(answer), {})
+    assert [r["clean_name"] for r in results] == ["Second"]
+    assert "id=0" in caplog.text

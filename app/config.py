@@ -122,6 +122,10 @@ _DEFAULT_CATEGORIES_SPEC: list[tuple[str, str, str]] = [
 DEFAULT_CATEGORIES: list[str] = [name for name, _, _ in _DEFAULT_CATEGORIES_SPEC]
 DEFAULT_CATEGORY_LABELS_EN: dict[str, str] = {name: en for name, en, _ in _DEFAULT_CATEGORIES_SPEC}
 DEFAULT_CATEGORY_SCOPES: dict[str, str] = {name: scope for name, _, scope in _DEFAULT_CATEGORIES_SPEC}
+# Default names and English labels (casefolded) that custom categories may not reuse
+RESERVED_CATEGORY_NAMES: frozenset[str] = frozenset(
+    value.casefold() for name, en, _ in _DEFAULT_CATEGORIES_SPEC for value in (name, en)
+)
 
 
 def merge_category_labels_en(custom_labels_en: dict[str, str] | None = None) -> dict[str, str]:

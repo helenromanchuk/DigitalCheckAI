@@ -9,8 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.categorizer.gemini_classifier import GeminiItemClassifier
 from app.config import (
-    DEFAULT_CATEGORIES,
-    DEFAULT_CATEGORY_LABELS_EN,
+    RESERVED_CATEGORY_NAMES,
     get_gemini_api_key,
     get_gemini_model,
     merge_category_labels_en,
@@ -104,15 +103,20 @@ def create_custom_category(
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
     """Adds a new user-defined category."""
-    # Default names and English labels are reserved: a custom "Other" would compete with "Прочее" in the
-    # Gemini prompt, and English labels set on a default category would be ignored
-    reserved = {name.casefold() for name in (*DEFAULT_CATEGORIES, *DEFAULT_CATEGORY_LABELS_EN.values())}
-    for value in (payload.name.strip(), payload.name_en.strip()):
-        if value.casefold() in reserved:
+    # Names and English labels must not repeat another category's: a custom "Other" would compete with
+    # "Прочее" in the Gemini prompt, and English labels set on a default category would be ignored.
+    # Re-entering an existing custom category with a new English name (a translation) is allowed
+    name = payload.name.strip()
+    labels_en = merge_category_labels_en(db.get_category_labels_en())
+    taken = set(RESERVED_CATEGORY_NAMES)
+    taken |= {c.casefold() for c in db.get_all_categories() if c != name}
+    taken |= {en.casefold() for cat, en in labels_en.items() if cat != name}
+    for value in (name, payload.name_en.strip()):
+        if value.casefold() in taken:
             raise HTTPException(
                 status_code=400,
                 detail=AppError(
-                    "category_reserved", f"'{value}' is already a default category name.", name=value
+                    "category_reserved", f"'{value}' is already used by another category.", name=value
                 ).to_detail(),
             )
     categories = db.add_custom_category(payload.name, payload.name_en)

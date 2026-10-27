@@ -22,7 +22,10 @@ def _configure_logging() -> None:
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     app_logger.addHandler(handler)
-    app_logger.setLevel(logging.getLevelNamesMapping().get(LOG_LEVEL, logging.INFO))
+    level = logging.getLevelNamesMapping().get(LOG_LEVEL)
+    app_logger.setLevel(level if level is not None else logging.INFO)
+    if level is None:
+        app_logger.warning("Неизвестный LOG_LEVEL=%r, используется INFO (DEBUG, INFO, WARNING, ERROR)", LOG_LEVEL)
 
 
 _configure_logging()

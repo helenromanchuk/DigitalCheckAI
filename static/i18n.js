@@ -157,7 +157,7 @@ const I18N = {
     "error.invalid_json": "Некорректный JSON-файл: {error}",
     "error.no_receipts": "В файле не найдено чеков Costco или Safeway.",
     "error.item_not_found": "Артикул {item} не найден в справочнике.",
-    "error.category_reserved": "«{name}» — название стандартной категории. Выберите другое название.",
+    "error.category_reserved": "Название «{name}» уже занято другой категорией. Выберите другое.",
     "error.unknown": "{message}",
     "sync.success": "Успешно загружено чеков: {fetched} (новых: {inserted}). Расшифровано новых Item#: {newItems} ({provider}).",
 
@@ -361,7 +361,7 @@ const I18N = {
     "error.invalid_json": "Invalid JSON file: {error}",
     "error.no_receipts": "No Costco or Safeway receipts found in the file.",
     "error.item_not_found": "Item {item} not found in the catalog.",
-    "error.category_reserved": "“{name}” is a default category name. Please choose another name.",
+    "error.category_reserved": "“{name}” is already used by another category. Please choose another name.",
     "error.unknown": "{message}",
     "sync.success": "Receipts downloaded: {fetched} (new: {inserted}). New Item #s decoded: {newItems} ({provider}).",
 
