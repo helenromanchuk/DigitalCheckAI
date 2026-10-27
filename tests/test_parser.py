@@ -281,3 +281,18 @@ def test_fee_without_total_is_unit_price_times_quantity():
 
     r = parse_any_costco_payload([order])[0]
     assert r["total"] == 150.0
+
+
+def test_spread_discount_gives_rounding_remainder_to_last_item():
+    from app.scraper.parser import spread_discount
+
+    items = [
+        {"gross_amount": 10.0, "discount_amount": 0.0, "net_amount": 10.0},
+        {"gross_amount": 10.0, "discount_amount": 0.0, "net_amount": 10.0},
+        {"gross_amount": 10.0, "discount_amount": 0.0, "net_amount": 10.0},
+        {"gross_amount": -5.0, "discount_amount": 0.0, "net_amount": -5.0},
+    ]
+
+    assert spread_discount(items, 1.0, "gross_amount") == 1.0
+    assert [i["discount_amount"] for i in items] == [0.33, 0.33, 0.34, 0.0]
+    assert [i["net_amount"] for i in items] == [9.67, 9.67, 9.66, -5.0]

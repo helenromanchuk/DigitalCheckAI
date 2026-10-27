@@ -237,3 +237,34 @@ def test_resync_moves_pending_row_to_parser_category(tmp_path: Path):
     with db.connect() as conn:
         row = conn.execute("SELECT category, classified_by FROM item_catalog WHERE item_number = '800877'").fetchone()
     assert (row["category"], row["classified_by"]) == ("Авто и заправка (Gas Station)", "parser")
+
+
+def test_gemini_item_numbers_differing_by_leading_zeros_are_not_matched_loosely(tmp_path: Path, monkeypatch):
+    import json
+    import types as pytypes
+    from google import genai
+
+    db = Database(tmp_path / "test_costco.db")
+    answer = {
+        "items": [
+            {"item_number": "00123", "clean_name": "Ambiguous", "category": "Прочее"},
+            {"item_number": "", "clean_name": "Empty", "category": "Прочее"},
+            {"item_number": "123", "clean_name": "Exact", "category": "Прочее"},
+        ]
+    }
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            self.models = pytypes.SimpleNamespace(
+                generate_content=lambda **kw: pytypes.SimpleNamespace(text=json.dumps(answer, ensure_ascii=False))
+            )
+
+    monkeypatch.setattr(genai, "Client", FakeClient)
+    batch = [
+        {"item_number": "0123", "raw_description": "A"},
+        {"item_number": "123", "raw_description": "B"},
+        {"item_number": "000", "raw_description": "C"},
+    ]
+    results = GeminiItemClassifier(db)._call_gemini_batch(batch, db.get_all_categories(), "key")
+
+    assert [(r["item_number"], r["clean_name"]) for r in results] == [("123", "Exact")]

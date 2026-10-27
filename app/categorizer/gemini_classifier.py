@@ -164,6 +164,12 @@ def fallback_categorize_item(item_number: str, raw_description: str) -> dict[str
     return result
 
 
+def _loose_item_key(item_number: str) -> str:
+    """Item number without spaces and leading zeros; "000" stays "0", an empty one stays empty."""
+    trimmed = item_number.strip()
+    return trimmed.lstrip("0") or ("0" if trimmed else "")
+
+
 class GeminiItemClassifier:
     """
     Costco item classifier.
@@ -264,13 +270,17 @@ class GeminiItemClassifier:
 
         parsed_data = json.loads(response.text)
         raw_map = {str(i["item_number"]): str(i.get("raw_description", "")) for i in batch}
-        # Gemini may return an item number with leading zeros or spaces; map it back to the original
-        loose_map = {k.strip().lstrip("0"): k for k in raw_map}
+        # Gemini may return an item number with leading zeros or spaces; map it back to the original.
+        # Only unambiguous keys: if "0123" and "123" are both in the batch, neither is matched loosely
+        loose_candidates: dict[str, list[str]] = {}
+        for k in raw_map:
+            loose_candidates.setdefault(_loose_item_key(k), []).append(k)
+        loose_map = {key: keys[0] for key, keys in loose_candidates.items() if key and len(keys) == 1}
         results: list[dict[str, str]] = []
 
         for entry in parsed_data.get("items", []):
             returned = str(entry.get("item_number", "")).strip()
-            inum = returned if returned in raw_map else loose_map.get(returned.lstrip("0"))
+            inum = returned if returned in raw_map else loose_map.get(_loose_item_key(returned))
             if not inum:
                 # An unknown or made-up item number must not create or overwrite catalog rows;
                 # the batch item stays pending and goes into the next classification run

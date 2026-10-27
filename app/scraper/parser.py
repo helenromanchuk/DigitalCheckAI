@@ -68,6 +68,25 @@ def _is_discount_row(raw_item: dict[str, Any]) -> tuple[bool, str | None]:
     return False, None
 
 
+def spread_discount(items: list[dict[str, Any]], amount: float, base_key: str) -> float:
+    """
+    Spreads a receipt- or order-level discount across items with a positive base_key amount,
+    in proportion to it, and returns the amount allocated. The last item gets the remainder
+    so rounding cents aren't lost.
+    """
+    allocatable = [i for i in items if i[base_key] > 0]
+    base = sum(i[base_key] for i in allocatable)
+    if amount <= 0 or base <= 0:
+        return 0.0
+    remaining = amount
+    for n, item in enumerate(allocatable, start=1):
+        share = remaining if n == len(allocatable) else round(amount * item[base_key] / base, 2)
+        remaining = round(remaining - share, 2)
+        item["discount_amount"] = round(item["discount_amount"] + share, 2)
+        item["net_amount"] = round(item["net_amount"] - share, 2)
+    return amount
+
+
 def _mark_fuel(item_entry: dict[str, Any]) -> None:
     item_entry["default_category"] = "Авто и заправка (Gas Station)"
     item_entry["default_clean_name"] = f"Топливо Costco ({item_entry['raw_description']})"
@@ -342,17 +361,8 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
     # in proportion to their amounts so category stats reflect what was actually paid
     order_discount = abs(_to_float(raw_order.get("discountAmount"), 0.0))
     unallocated = round(order_discount - total_discount, 2)
-    gross_sum = sum(i["gross_amount"] for i in normalized_items if i["gross_amount"] > 0)
-    if unallocated > 0 and gross_sum > 0:
-        allocatable = [i for i in normalized_items if i["gross_amount"] > 0]
-        remaining = unallocated
-        for n, item in enumerate(allocatable, start=1):
-            # The last item gets the remainder so rounding cents aren't lost
-            share = remaining if n == len(allocatable) else round(unallocated * item["gross_amount"] / gross_sum, 2)
-            remaining = round(remaining - share, 2)
-            item["discount_amount"] = round(item["discount_amount"] + share, 2)
-            item["net_amount"] = round(item["gross_amount"] - item["discount_amount"], 2)
-        total_discount = round(total_discount + unallocated, 2)
+    allocated = spread_discount(normalized_items, unallocated, "gross_amount")
+    total_discount = round(total_discount + allocated, 2)
 
     subtotal = _to_float(raw_order.get("merchandiseTotal") or raw_order.get("subTotal") or raw_order.get("subtotal"), 0.0)
     tax = _to_float(raw_order.get("orderTax") or raw_order.get("totalTax") or raw_order.get("tax"), 0.0)

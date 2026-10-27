@@ -430,5 +430,6 @@ function setLanguage(lang) {
   }
   applyStaticTranslations();
   // Dynamic content (tables, charts, banners from JS) is rendered with t(), so re-render it
-  refreshAll();
+  // from the last loaded data: the data itself doesn't depend on the language
+  rerenderAll();
 }

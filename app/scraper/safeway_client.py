@@ -13,6 +13,7 @@ from typing import Any
 
 from app.config import BROWSER_PROFILE_DIR
 from app.scraper.costco_client import _sync_lock
+from app.scraper.parser import spread_discount
 
 logger = logging.getLogger(__name__)
 
@@ -120,15 +121,7 @@ def parse_safeway_receipt(raw: dict[str, Any]) -> dict[str, Any] | None:
 
     # Receipt-wide discount that isn't on any line
     unallocated = round(sum(i["net_amount"] for i in items) - subtotal, 2)
-    positive = [i for i in items if i["net_amount"] > 0]
-    base = sum(i["net_amount"] for i in positive)
-    if unallocated > 0 and base > 0:
-        remaining = unallocated
-        for idx, item in enumerate(positive):
-            share = remaining if idx == len(positive) - 1 else round(unallocated * item["net_amount"] / base, 2)
-            item["discount_amount"] = round(item["discount_amount"] + share, 2)
-            item["net_amount"] = round(item["net_amount"] - share, 2)
-            remaining = round(remaining - share, 2)
+    spread_discount(items, unallocated, "net_amount")
 
     city = str((raw.get("address") or {}).get("city") or "").strip().title()
     store_name = str(raw.get("storeName") or "Safeway").strip()

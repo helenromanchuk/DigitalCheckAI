@@ -3,6 +3,13 @@ let availableCategories = [];
 let donutChartInstance = null;
 let monthlyChartInstance = null;
 let currentStore = "costco";
+// Last API responses, so a language switch can re-render without new requests
+let lastConfig = null;
+let lastStats = null;
+let lastMembership = null;
+let lastItems = null;
+let lastReceipts = null;
+let lastSearch = null;
 
 const STORES = ["costco", "safeway", "all", "search"];
 const STORE_LABELS = { costco: "Costco", safeway: "Safeway" };
@@ -121,7 +128,11 @@ function setStore(store) {
 
 async function loadConfig() {
   const res = await fetch("/api/config");
-  const data = await res.json();
+  lastConfig = await res.json();
+  renderConfig(lastConfig);
+}
+
+function renderConfig(data) {
   availableCategories = data.categories || [];
 
   const dot = document.getElementById("geminiStatusDot");
@@ -158,6 +169,21 @@ async function refreshAll() {
   await Promise.all([loadStats(), loadMembershipAnalytics(), loadItemsTable(), loadReceiptsList()]);
 }
 
+// Re-renders the last loaded data without new requests (e.g. after a language switch)
+function rerenderAll() {
+  if (lastConfig) renderConfig(lastConfig);
+  if (currentStore === "search") {
+    const query = document.getElementById("purchaseSearchInput").value.trim();
+    if (lastSearch && lastSearch.query === query) renderPurchaseSearch(lastSearch.data, query);
+    else runPurchaseSearch();
+    return;
+  }
+  if (lastStats) renderStats(lastStats);
+  if (lastMembership && currentStore === "costco") renderMembershipAnalytics(lastMembership.data, lastMembership.ctx);
+  if (lastItems) renderItemsTable(lastItems);
+  if (lastReceipts) renderReceiptsList(lastReceipts);
+}
+
 function schedulePurchaseSearch() {
   clearTimeout(purchaseSearchTimer);
   purchaseSearchTimer = setTimeout(runPurchaseSearch, 300);
@@ -177,6 +203,13 @@ async function runPurchaseSearch() {
   const data = await res.json();
   // The user may have changed the search text while the request was in flight
   if (document.getElementById("purchaseSearchInput").value.trim() !== query) return;
+  lastSearch = { query, data };
+  renderPurchaseSearch(data, query);
+}
+
+function renderPurchaseSearch(data, query) {
+  const tbody = document.getElementById("searchResultsBody");
+  const summary = document.getElementById("searchSummary");
   const rows = data.results || [];
 
   if (!rows.length) {
@@ -248,6 +281,12 @@ async function loadMembershipAnalytics() {
   const res = await fetch(`/api/membership-analytics?${params.toString()}`);
   if (!res.ok) return;
   const data = await res.json();
+  lastMembership = { data, ctx: { selectedMode, startDate, endDate, excludeAlcohol } };
+  renderMembershipAnalytics(data, lastMembership.ctx);
+}
+
+function renderMembershipAnalytics(data, { selectedMode, startDate, endDate, excludeAlcohol }) {
+  const yearSelect = document.getElementById("membershipYearSelect");
 
   // Refresh the list of available years in the select
   if (yearSelect && Array.isArray(data.available_years)) {
@@ -354,7 +393,11 @@ function membershipPeriodLabel(selectedYear, startDate, endDate) {
 async function loadStats() {
   const params = getFilterQueryParams();
   const res = await fetch(`/api/stats?${params.toString()}`);
-  const data = await res.json();
+  lastStats = await res.json();
+  renderStats(lastStats);
+}
+
+function renderStats(data) {
   const s = data.summary || {};
 
   document.getElementById("kpiTotalSpent").textContent = formatMoney(s.total_spent);
@@ -525,7 +568,11 @@ async function loadItemsTable() {
   if (search) params.set("search", search);
 
   const res = await fetch(`/api/items?${params.toString()}`);
-  const data = await res.json();
+  lastItems = await res.json();
+  renderItemsTable(lastItems);
+}
+
+function renderItemsTable(data) {
   availableCategories = data.categories || availableCategories;
   const items = data.items || [];
 
@@ -611,7 +658,11 @@ async function updateItemCategory(itemNumber, category, newCleanName) {
 async function loadReceiptsList() {
   const params = getFilterQueryParams();
   const res = await fetch(`/api/receipts?${params.toString()}`);
-  const data = await res.json();
+  lastReceipts = await res.json();
+  renderReceiptsList(lastReceipts);
+}
+
+function renderReceiptsList(data) {
   const receipts = data.receipts || [];
   const container = document.getElementById("receiptsContainer");
   container.innerHTML = "";
