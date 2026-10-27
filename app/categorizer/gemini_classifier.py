@@ -2,10 +2,8 @@
 import json
 import logging
 import re
-from collections import Counter
-from enum import Enum
 from functools import lru_cache
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, create_model
 
@@ -24,11 +22,8 @@ GEMINI_TIMEOUT_MS = 120_000
 
 
 class CategorizedItemSchema(BaseModel):
-    item_number: str = Field(
-        description=(
-            "Exact item_number from the input list without modifications "
-            "(keep prefixes like 'SWY-' and leading zeros)"
-        )
+    id: int = Field(
+        description="Exact integer id of the item from the input list"
     )
     clean_name: str = Field(
         description=(
@@ -102,8 +97,7 @@ SYSTEM_INSTRUCTION = (
     f"{_CATEGORY_RULES_TEXT}\n\n"
     "### 3. Output Completeness Requirements\n"
     "- Return an entry for **every** item in the input list in the exact same order.\n"
-    "- The `item_number` field in the output must match the input `item_number` character-for-character "
-    "(keep prefixes such as `SWY-` and leading zeros)."
+    "- Copy each item's integer `id` from the input list without modification."
 )
 
 
@@ -111,11 +105,11 @@ SYSTEM_INSTRUCTION = (
 def _build_batch_schema_cached(categories: tuple[str, ...]) -> type[BaseModel]:
     if not categories:
         return CategorizedBatchSchema
-    category_enum = Enum("CategoryEnum", {f"CAT_{i}": c for i, c in enumerate(categories)}, type=str)
+    category_desc = CategorizedItemSchema.model_fields["category"].description
     item_model = create_model(
         "DynamicCategorizedItemSchema",
         __base__=CategorizedItemSchema,
-        category=(category_enum, ...),
+        category=(Literal[*categories], Field(description=category_desc)),
     )
     return create_model(
         "DynamicCategorizedBatchSchema",
@@ -125,21 +119,29 @@ def _build_batch_schema_cached(categories: tuple[str, ...]) -> type[BaseModel]:
 
 
 def _build_batch_schema(categories: list[str] | tuple[str, ...]) -> type[BaseModel]:
-    """Builds (or returns cached) a batch response schema whose category field is an enum of allowed categories."""
+    """Builds (or returns cached) a batch response schema whose category field is restricted to allowed categories."""
     return _build_batch_schema_cached(tuple(categories))
 
 
 def _build_classification_prompt(
-    items_payload: list[dict[str, Any]],
+    batch: list[dict[str, Any]],
     categories: list[str],
     category_labels_en: dict[str, str] | None = None,
 ) -> str:
-    """Builds the per-batch user prompt with the allowed categories and items to classify."""
-    # Default labels take precedence over custom labels, matching static/i18n.js categoryLabel()
+    """Builds the per-batch user prompt with the allowed categories and items (with integer ids) to classify."""
     labels_en = {**(category_labels_en or {}), **DEFAULT_CATEGORY_LABELS_EN}
     allowed_entries: list[str | dict[str, str]] = [
         {"category": c, "english_label": labels_en[c]} if c in labels_en and labels_en[c] != c else c
         for c in categories
+    ]
+    items_payload = [
+        {
+            "id": idx,
+            "item_number": str(i["item_number"]),
+            "raw_description": str(i.get("raw_description", "")),
+            "sample_unit_price": i.get("sample_unit_price", 0.0),
+        }
+        for idx, i in enumerate(batch)
     ]
     return (
         "Allowed categories (set `category` to the exact `category` value):\n"
@@ -304,28 +306,16 @@ def fallback_categorize_item(item_number: str, raw_description: str) -> dict[str
     return result
 
 
-_SWY_PREFIX_RE = re.compile(r"^SWY(?=[-\s_\d])[-\s_]*", re.IGNORECASE)
+def _make_gemini_client(api_key: str) -> Any:
+    """Creates a Gemini API client with a finite HTTP timeout."""
+    from google import genai
+    from google.genai import types
 
-
-def _has_swy_prefix(item_number: str) -> bool:
-    return bool(_SWY_PREFIX_RE.match(item_number.strip()))
-
-
-def _core_item_key(item_number: str) -> str:
-    """Item number without spaces, 'SWY-' prefix, and leading zeros; '000' stays '0', empty stays empty."""
-    trimmed = item_number.strip()
-    without_prefix = _SWY_PREFIX_RE.sub("", trimmed).strip()
-    if without_prefix:
-        trimmed = without_prefix
-    return trimmed.lstrip("0") or ("0" if trimmed else "")
-
-
-def _loose_item_key(item_number: str) -> str:
-    """Normalized item key keeping Safeway ('SWY-...') and Costco items in separate namespaces."""
-    core = _core_item_key(item_number)
-    if not core:
-        return ""
-    return f"SWY-{core}" if _has_swy_prefix(item_number) else core
+    # Without a timeout a hung Gemini request blocks sync forever; on error the batch goes to the fallback
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS),
+    )
 
 
 class GeminiItemClassifier:
@@ -338,7 +328,6 @@ class GeminiItemClassifier:
     def __init__(self, db: Database, batch_size: int = 40) -> None:
         self.db = db
         self.batch_size = batch_size
-        self._cached_custom_labels_en: dict[str, str] | None = None
 
     def classify_new_items(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         """
@@ -360,27 +349,33 @@ class GeminiItemClassifier:
             saved = self.db.save_categorized_items(fallback_results, classified_by="fallback")
             return {"classified_count": saved, "provider": "fallback"}
 
-        # Query custom category English labels and build the dynamic Enum schema once across all batches
-        self._cached_custom_labels_en = self.db.get_category_labels_en()
-        _build_batch_schema(categories)
+        custom_labels_en: dict[str, str] | None = None
+        client: Any = None
         total_saved = 0
-        try:
-            for start in range(0, len(items), self.batch_size):
-                batch = items[start : start + self.batch_size]
-                try:
-                    batch_results = self._call_gemini_batch(batch, categories, api_key)
-                    saved = self.db.save_categorized_items(batch_results, classified_by="gemini")
-                    total_saved += saved
-                except Exception as exc:
-                    logger.warning("Ошибка вызова Gemini API (%s), применяем fallback для пакета.", exc)
-                    fallback_results = [
-                        fallback_categorize_item(str(i["item_number"]), str(i.get("raw_description", "")))
-                        for i in batch
-                    ]
-                    saved = self.db.save_categorized_items(fallback_results, classified_by="fallback")
-                    total_saved += saved
-        finally:
-            self._cached_custom_labels_en = None
+        for start in range(0, len(items), self.batch_size):
+            batch = items[start : start + self.batch_size]
+            try:
+                if custom_labels_en is None:
+                    custom_labels_en = self.db.get_category_labels_en()
+                if client is None:
+                    client = _make_gemini_client(api_key)
+                batch_results = self._call_gemini_batch(
+                    batch,
+                    categories,
+                    api_key,
+                    custom_labels_en=custom_labels_en,
+                    client=client,
+                )
+                saved = self.db.save_categorized_items(batch_results, classified_by="gemini")
+                total_saved += saved
+            except Exception as exc:
+                logger.warning("Ошибка вызова Gemini API (%s), применяем fallback для пакета.", exc)
+                fallback_results = [
+                    fallback_categorize_item(str(i["item_number"]), str(i.get("raw_description", "")))
+                    for i in batch
+                ]
+                saved = self.db.save_categorized_items(fallback_results, classified_by="fallback")
+                total_saved += saved
 
         return {"classified_count": total_saved, "provider": "gemini"}
 
@@ -389,33 +384,19 @@ class GeminiItemClassifier:
         batch: list[dict[str, Any]],
         categories: list[str],
         api_key: str,
+        custom_labels_en: dict[str, str] | None = None,
+        client: Any = None,
     ) -> list[dict[str, str]]:
-        """Calls the Google GenAI SDK with a strict JSON schema for a batch of item numbers."""
-        from google import genai
+        """Calls the Google GenAI SDK with a strict JSON schema for a batch of items."""
         from google.genai import types
 
-        # Without a timeout a hung Gemini request blocks sync forever; on error the batch goes to the fallback
-        client = genai.Client(
-            api_key=api_key,
-            http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS),
-        )
+        if client is None:
+            client = _make_gemini_client(api_key)
+        if custom_labels_en is None:
+            custom_labels_en = self.db.get_category_labels_en()
+
         model_name = get_gemini_model()
-
-        items_payload = [
-            {
-                "item_number": str(i["item_number"]),
-                "raw_description": str(i.get("raw_description", "")),
-                "sample_unit_price": i.get("sample_unit_price", 0.0),
-            }
-            for i in batch
-        ]
-
-        custom_labels_en = (
-            self._cached_custom_labels_en
-            if self._cached_custom_labels_en is not None
-            else self.db.get_category_labels_en()
-        )
-        prompt = _build_classification_prompt(items_payload, categories, custom_labels_en)
+        prompt = _build_classification_prompt(batch, categories, custom_labels_en)
         batch_schema = _build_batch_schema(categories)
 
         response = client.models.generate_content(
@@ -430,59 +411,24 @@ class GeminiItemClassifier:
         )
 
         parsed_data = json.loads(response.text)
-        raw_map = {str(i["item_number"]): str(i.get("raw_description", "")) for i in batch}
-        # Keep Costco ('1234') and Safeway ('SWY-1234') in separate loose_candidates keys so they don't
-        # mark each other as ambiguous. If Gemini drops 'SWY-' on a Safeway item, only match it to
-        # 'SWY-<core>' when no Costco item with '<core>' is in the batch; and if both '<core>' and
-        # 'SWY-<core>' are in the batch while 'SWY-<core>' is missing from the response, reject bare
-        # '<core>' so a dropped prefix on the Safeway item can never overwrite the Costco item.
-        loose_candidates: dict[str, list[str]] = {}
-        for k in raw_map:
-            loose_candidates.setdefault(_loose_item_key(k), []).append(k)
-        loose_map = {key: keys[0] for key, keys in loose_candidates.items() if key and len(keys) == 1}
+        results_by_id: dict[int, dict[str, str]] = {}
 
-        entries = parsed_data.get("items", [])
-        returned_loose_keys = {_loose_item_key(str(e.get("item_number", ""))) for e in entries}
-
-        resolved_entries: list[tuple[str, dict[str, Any]]] = []
-        for entry in entries:
-            returned = str(entry.get("item_number", "")).strip()
-            lkey = _loose_item_key(returned)
-            core = _core_item_key(returned)
-            swy_key = f"SWY-{core}" if core else ""
-
-            if not _has_swy_prefix(returned) and swy_key in loose_candidates:
-                if core not in loose_candidates:
-                    inum = loose_map.get(swy_key)
-                elif swy_key not in returned_loose_keys:
-                    inum = None
-                else:
-                    inum = returned if returned in raw_map else loose_map.get(lkey)
-            else:
-                inum = returned if returned in raw_map else loose_map.get(lkey)
-
-            if not inum:
-                logger.warning("Gemini вернул артикул не из пакета: %r", returned)
+        for entry in parsed_data.get("items", []):
+            item_id = entry.get("id")
+            if type(item_id) is not int or not (0 <= item_id < len(batch)):
+                logger.warning("Gemini вернул id товара не из пакета: %r", item_id)
                 continue
-            resolved_entries.append((inum, entry))
-
-        inum_counts = Counter(inum for inum, _ in resolved_entries)
-        results: list[dict[str, str]] = []
-
-        for inum, entry in resolved_entries:
-            if inum_counts[inum] > 1:
-                logger.warning("Gemini вернул дублирующийся артикул в пакете: %r", inum)
-                continue
+            src = batch[item_id]
+            inum = str(src["item_number"])
+            raw_desc = str(src.get("raw_description", ""))
             cat = str(entry.get("category", "")).strip()
             if cat not in categories:
                 logger.warning("Gemini вернул неизвестную категорию %r для артикула %s", cat, inum)
                 cat = "Прочее"
-            results.append(
-                {
-                    "item_number": inum,
-                    "raw_description": raw_map.get(inum, inum),
-                    "clean_name": str(entry.get("clean_name") or raw_map.get(inum, inum)).strip(),
-                    "category": cat,
-                }
-            )
-        return results
+            results_by_id[item_id] = {
+                "item_number": inum,
+                "raw_description": raw_desc or inum,
+                "clean_name": str(entry.get("clean_name") or raw_desc or inum).strip(),
+                "category": cat,
+            }
+        return list(results_by_id.values())

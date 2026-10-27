@@ -8,7 +8,12 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from app.categorizer.gemini_classifier import GeminiItemClassifier
-from app.config import get_gemini_api_key, get_gemini_model, save_gemini_api_key
+from app.config import (
+    DEFAULT_CATEGORY_LABELS_EN,
+    get_gemini_api_key,
+    get_gemini_model,
+    save_gemini_api_key,
+)
 from app.database import Database
 from app.errors import AppError, error_detail
 from app.scraper.costco_client import CostcoClient
@@ -30,6 +35,11 @@ def _sync_error_detail(site: str, exc: BaseException) -> dict[str, Any]:
         "cause": cause,
         "message": f"Sync with {site} failed: {cause['message']}",
     }
+
+
+def _all_category_labels_en(db: Database) -> dict[str, str]:
+    """English names of all categories (defaults take precedence over custom labels)."""
+    return {**db.get_category_labels_en(), **DEFAULT_CATEGORY_LABELS_EN}
 
 
 def get_db() -> Database:
@@ -69,7 +79,7 @@ def get_app_config(db: Database = Depends(get_db)) -> dict[str, Any]:
         "has_gemini_key": has_key,
         "gemini_model": get_gemini_model(),
         "categories": db.get_all_categories(),
-        "category_labels_en": db.get_category_labels_en(),
+        "category_labels_en": _all_category_labels_en(db),
         "pending_gemini_items_count": len(pending),
     }
 
@@ -98,7 +108,7 @@ def create_custom_category(
 ) -> dict[str, Any]:
     """Adds a new user-defined category."""
     categories = db.add_custom_category(payload.name, payload.name_en)
-    return {"categories": categories, "category_labels_en": db.get_category_labels_en()}
+    return {"categories": categories, "category_labels_en": _all_category_labels_en(db)}
 
 
 @router.post("/sync")

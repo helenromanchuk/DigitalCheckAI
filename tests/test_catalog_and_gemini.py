@@ -10,7 +10,7 @@ def test_first_time_gemini_classification_and_manual_override(tmp_path: Path, mo
     db = Database(tmp_path / "test_costco.db")
     gemini_calls: list[list[dict]] = []
 
-    def fake_gemini_batch(self, batch, categories, api_key):
+    def fake_gemini_batch(self, batch, categories, api_key, **_kwargs):
         gemini_calls.append(batch)
         return [
             {
@@ -23,6 +23,7 @@ def test_first_time_gemini_classification_and_manual_override(tmp_path: Path, mo
         ]
 
     monkeypatch.setattr("app.categorizer.gemini_classifier.get_gemini_api_key", lambda: "test-gemini-key-123")
+    monkeypatch.setattr("app.categorizer.gemini_classifier._make_gemini_client", lambda api_key: object())
     monkeypatch.setattr(GeminiItemClassifier, "_call_gemini_batch", fake_gemini_batch)
 
     receipt_1 = parse_any_costco_payload(
@@ -128,8 +129,10 @@ def test_gemini_unknown_item_numbers_are_ignored(tmp_path: Path, monkeypatch):
 
     answer = {
         "items": [
-            {"item_number": "0123456 ", "clean_name": "Olive Oil", "category": "Бакалея, масла, специи и консервы"},
-            {"item_number": "999999", "clean_name": "Invented", "category": "Прочее"},
+            {"id": 0, "clean_name": "Olive Oil", "category": "Бакалея, масла, специи и консервы"},
+            {"id": 999, "clean_name": "Invented", "category": "Прочее"},
+            {"id": -1, "clean_name": "Negative", "category": "Прочее"},
+            {"id": True, "clean_name": "BoolNotInt", "category": "Прочее"},
         ]
     }
 
@@ -246,7 +249,7 @@ def test_resync_moves_pending_row_to_parser_category(tmp_path: Path):
     assert (row["category"], row["classified_by"]) == ("Авто и заправка (Gas Station)", "parser")
 
 
-def test_gemini_item_numbers_differing_by_leading_zeros_are_not_matched_loosely(tmp_path: Path, monkeypatch):
+def test_gemini_item_numbers_differing_by_leading_zeros_and_duplicate_ids(tmp_path: Path, monkeypatch):
     import json
     import types as pytypes
 
@@ -255,9 +258,9 @@ def test_gemini_item_numbers_differing_by_leading_zeros_are_not_matched_loosely(
     db = Database(tmp_path / "test_costco.db")
     answer = {
         "items": [
-            {"item_number": "00123", "clean_name": "Ambiguous", "category": "Прочее"},
-            {"item_number": "", "clean_name": "Empty", "category": "Прочее"},
-            {"item_number": "123", "clean_name": "Exact", "category": "Прочее"},
+            {"id": 1, "clean_name": "First Draft", "category": "Прочее"},
+            {"id": "", "clean_name": "Empty", "category": "Прочее"},
+            {"id": 1, "clean_name": "Exact", "category": "Прочее"},
         ]
     }
 
@@ -390,6 +393,7 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path, monkey
     import types as pytypes
 
     from google import genai
+    from google.genai._transformers import t_schema
 
     from app.categorizer.gemini_classifier import (
         SYSTEM_INSTRUCTION,
@@ -413,18 +417,17 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path, monkey
                         {
                             "items": [
                                 {
-                                    # Dropped SWY- prefix when no Costco item with 7989311562 is in the batch
-                                    "item_number": "7989311562",
+                                    "id": 0,
                                     "clean_name": "O Organics Broth (32 fl oz)",
                                     "category": "Бакалея, масла, специи и консервы",
                                 },
                                 {
-                                    "item_number": "9001",
+                                    "id": 1,
                                     "clean_name": "Kirkland Dog Treats (5 lb)",
                                     "category": "Питомцы",
                                 },
                                 {
-                                    "item_number": "9002",
+                                    "id": 2,
                                     "clean_name": "Mystery Item",
                                     "category": "Nonexistent Category",
                                 },
@@ -455,17 +458,20 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path, monkey
     prompt = _build_classification_prompt(batch, categories, db.get_category_labels_en())
     for cat in categories:
         assert cat in prompt
+    assert '"id": 0' in prompt and '"id": 1' in prompt and '"id": 2' in prompt
     assert '"english_label": "Pets"' in prompt
     assert '"english_label": "Other"' in prompt
     assert '"english_label": "Misc"' not in prompt
 
-    # Dynamic schema is cached and restricts category to an enum of the allowed categories
+    # Dynamic schema is cached, restricts category to an enum of allowed categories, and keeps its description
     schema_cls = _build_batch_schema(categories)
     assert _build_batch_schema(categories) is schema_cls
-    schema_json = schema_cls.model_json_schema()
-    assert categories in [
-        defn.get("enum") for defn in schema_json.get("$defs", {}).values() if "enum" in defn
-    ]
+    cat_prop = schema_cls.model_json_schema()["$defs"]["DynamicCategorizedItemSchema"]["properties"]["category"]
+    assert cat_prop["enum"] == categories
+    assert cat_prop["description"] == CategorizedItemSchema.model_fields["category"].description
+    genai_cat = t_schema(None, schema_cls).properties["items"].items.properties["category"]
+    assert genai_cat.enum == categories
+    assert genai_cat.description == CategorizedItemSchema.model_fields["category"].description
 
     results = GeminiItemClassifier(db)._call_gemini_batch(batch, categories, "key")
     assert captured["config"].system_instruction == SYSTEM_INSTRUCTION
@@ -505,21 +511,25 @@ def test_safeway_and_costco_same_digits_never_overwrite_each_other(tmp_path: Pat
         {"item_number": "SWY-1234", "raw_description": "O ORGNC MILK"},
     ]
 
-    # 1. When Gemini keeps the SWY- prefix (even with leading zeros / lowercase), both match cleanly
-    answer_both = {
-        "items": [
-            {"item_number": "01234", "clean_name": "Kirkland Olive Oil", "category": "Бакалея, масла, специи и консервы"},
-            {"item_number": "swy-01234", "clean_name": "O Organics Milk", "category": "Молочные продукты, сыр и яйца"},
+    def set_answer(items):
+        monkeypatch.setattr(
+            genai,
+            "Client",
+            lambda **kw: pytypes.SimpleNamespace(
+                models=pytypes.SimpleNamespace(
+                    generate_content=lambda **gkw: pytypes.SimpleNamespace(
+                        text=json.dumps({"items": items}, ensure_ascii=False)
+                    )
+                )
+            ),
+        )
+
+    # 1. Both answered -> both match their respective item
+    set_answer(
+        [
+            {"id": 0, "clean_name": "Kirkland Olive Oil", "category": "Бакалея, масла, специи и консервы"},
+            {"id": 1, "clean_name": "O Organics Milk", "category": "Молочные продукты, сыр и яйца"},
         ]
-    }
-    monkeypatch.setattr(
-        genai,
-        "Client",
-        lambda **kw: pytypes.SimpleNamespace(
-            models=pytypes.SimpleNamespace(
-                generate_content=lambda **gkw: pytypes.SimpleNamespace(text=json.dumps(answer_both, ensure_ascii=False))
-            )
-        ),
     )
     res_both = GeminiItemClassifier(db)._call_gemini_batch(batch, categories, "key")
     assert [(r["item_number"], r["clean_name"]) for r in res_both] == [
@@ -527,36 +537,86 @@ def test_safeway_and_costco_same_digits_never_overwrite_each_other(tmp_path: Pat
         ("SWY-1234", "O Organics Milk"),
     ]
 
-    # 2. If Gemini drops the SWY- prefix when both 1234 and SWY-1234 are in the batch, neither overwrites 1234
-    answer_dropped = {
-        "items": [
-            {"item_number": "1234", "clean_name": "O Organics Milk", "category": "Молочные продукты, сыр и яйца"},
-        ]
-    }
-    monkeypatch.setattr(
-        genai,
-        "Client",
-        lambda **kw: pytypes.SimpleNamespace(
-            models=pytypes.SimpleNamespace(
-                generate_content=lambda **gkw: pytypes.SimpleNamespace(
-                    text=json.dumps(answer_dropped, ensure_ascii=False)
+    # 2. Only Costco (id=0) answered -> Costco item is saved, not discarded
+    set_answer([{"id": 0, "clean_name": "Kirkland Olive Oil", "category": "Бакалея, масла, специи и консервы"}])
+    res_costco_only = GeminiItemClassifier(db)._call_gemini_batch(batch, categories, "key")
+    assert [(r["item_number"], r["clean_name"]) for r in res_costco_only] == [("1234", "Kirkland Olive Oil")]
+
+    # 3. Only Safeway (id=1) answered -> Safeway item is saved, Costco 1234 is untouched
+    set_answer([{"id": 1, "clean_name": "O Organics Milk", "category": "Молочные продукты, сыр и яйца"}])
+    res_swy_only = GeminiItemClassifier(db)._call_gemini_batch(batch, categories, "key")
+    assert [(r["item_number"], r["clean_name"]) for r in res_swy_only] == [("SWY-1234", "O Organics Milk")]
+
+
+def test_classify_new_items_reuses_client_and_falls_back_on_label_error(tmp_path: Path, monkeypatch):
+    import json
+    import types as pytypes
+
+    from google import genai
+
+    db = Database(tmp_path / "test_costco.db")
+    monkeypatch.setattr("app.categorizer.gemini_classifier.get_gemini_api_key", lambda: "test-key")
+
+    client_creations = 0
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            nonlocal client_creations
+            client_creations += 1
+            self.models = pytypes.SimpleNamespace(
+                generate_content=lambda **kw: pytypes.SimpleNamespace(
+                    text=json.dumps(
+                        {"items": [{"id": 0, "clean_name": "Decoded", "category": "Прочее"}]},
+                        ensure_ascii=False,
+                    )
                 )
             )
-        ),
-    )
-    assert GeminiItemClassifier(db)._call_gemini_batch(batch, categories, "key") == []
+
+    monkeypatch.setattr(genai, "Client", FakeClient)
+    items = [
+        {"item_number": "101", "raw_description": "KS ORG EVOO"},
+        {"item_number": "102", "raw_description": "KERRYGOLD BUTTER"},
+    ]
+    classifier = GeminiItemClassifier(db, batch_size=1)
+    res = classifier.classify_new_items(items)
+    assert res == {"classified_count": 2, "provider": "gemini"}
+    assert client_creations == 1
+
+    # If label lookup fails on a busy DB, classify_new_items falls back instead of raising
+    def boom():
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(db, "get_category_labels_en", boom)
+    res_fb = classifier.classify_new_items([{"item_number": "103", "raw_description": "KS ORG EVOO"}])
+    assert res_fb["classified_count"] == 1
+    assert db.get_existing_catalog_map(["103"])["103"]["classified_by"] == "fallback"
 
 
-def test_default_category_labels_en_match_frontend_i18n():
-    import json
-    import re
+def test_config_api_returns_merged_english_category_labels(tmp_path: Path):
+    from fastapi.testclient import TestClient
 
+    from app.api.routes import get_db
     from app.config import BASE_DIR, DEFAULT_CATEGORIES, DEFAULT_CATEGORY_LABELS_EN
+    from app.main import app
 
     i18n_js = (BASE_DIR / "static" / "i18n.js").read_text(encoding="utf-8")
-    match = re.search(r"const\s+CATEGORY_LABELS_EN\s*=\s*(\{.*?\});", i18n_js, flags=re.DOTALL)
-    assert match is not None
-    js_labels = json.loads(match.group(1))
-
-    assert DEFAULT_CATEGORY_LABELS_EN == js_labels
+    assert "CATEGORY_LABELS_EN" not in i18n_js
     assert list(DEFAULT_CATEGORY_LABELS_EN) == DEFAULT_CATEGORIES
+
+    test_db = Database(tmp_path / "config_labels.db")
+    app.dependency_overrides[get_db] = lambda: test_db
+    try:
+        client = TestClient(app)
+        res = client.get("/api/config")
+        assert res.status_code == 200
+        assert res.json()["category_labels_en"] == DEFAULT_CATEGORY_LABELS_EN
+
+        # Custom category label is added, while default category label cannot be overwritten
+        client.post("/api/categories", json={"name": "Питомцы", "name_en": "Pets"})
+        res_override = client.post("/api/categories", json={"name": "Прочее", "name_en": "Misc"})
+        assert res_override.status_code == 200
+        labels = res_override.json()["category_labels_en"]
+        assert labels["Питомцы"] == "Pets"
+        assert labels["Прочее"] == "Other"
+    finally:
+        app.dependency_overrides.clear()

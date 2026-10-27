@@ -405,25 +405,6 @@ const I18N = {
   }
 };
 
-// Default categories are stored in the database under their Russian names; show English names in the English UI
-const CATEGORY_LABELS_EN = {
-  "Мясо, птица и морепродукты": "Meat, poultry & seafood",
-  "Овощи, фрукты и ягоды": "Fruits, vegetables & berries",
-  "Молочные продукты, сыр и яйца": "Dairy, cheese & eggs",
-  "Выпечка, хлеб и готовая еда (Deli)": "Bakery, bread & prepared food (Deli)",
-  "Бакалея, масла, специи и консервы": "Pantry, oils, spices & canned goods",
-  "Заморозка и полуфабрикаты": "Frozen & ready meals",
-  "Снеки, сладости, орехи и напитки": "Snacks, sweets, nuts & drinks",
-  "Бытовая химия, бумага и уборка": "Household, paper & cleaning",
-  "Здоровье, аптека, витамины и гигиена": "Health, pharmacy, vitamins & personal care",
-  "Товары для дома, кухни и сада": "Home, kitchen & garden",
-  "Одежда и обувь": "Clothing & shoes",
-  "Электроника и техника": "Electronics & appliances",
-  "Авто и заправка (Gas Station)": "Auto & fuel (Gas Station)",
-  "Алкоголь": "Alcohol",
-  "Прочее": "Other"
-};
-
 function detectLang() {
   try {
     const saved = localStorage.getItem("uiLang");
@@ -441,12 +422,12 @@ function t(key, params = {}) {
   return template.replace(/\{(\w+)\}/g, (match, name) => (name in params ? String(params[name]) : match));
 }
 
-// English names of the user's own categories, from /api/config
+// English names of categories (defaults + custom), from /api/config
 let customCategoryLabelsEn = {};
 
 function categoryLabel(category) {
   if (currentLang !== "en") return category;
-  return CATEGORY_LABELS_EN[category] || customCategoryLabelsEn[category] || category;
+  return customCategoryLabelsEn[category] || category;
 }
 
 function applyStaticTranslations() {
