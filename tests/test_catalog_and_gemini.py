@@ -620,3 +620,29 @@ def test_config_api_returns_merged_english_category_labels(tmp_path: Path):
         assert labels["Прочее"] == "Other"
     finally:
         app.dependency_overrides.clear()
+
+
+def test_gemini_request_and_response_logged_at_debug(tmp_path: Path, caplog):
+    import json
+    import logging
+    import types as pytypes
+
+    db = Database(tmp_path / "test_costco.db")
+    answer = {"items": [{"id": 0, "clean_name": "Kirkland Olive Oil", "category": "Прочее"}]}
+    usage = pytypes.SimpleNamespace(prompt_token_count=120, candidates_token_count=30)
+    client = pytypes.SimpleNamespace(
+        models=pytypes.SimpleNamespace(
+            generate_content=lambda **kw: pytypes.SimpleNamespace(
+                text=json.dumps(answer, ensure_ascii=False), usage_metadata=usage
+            )
+        )
+    )
+    batch = [{"item_number": "1234", "raw_description": "KS ORG EVOO", "sample_unit_price": 9.99}]
+
+    with caplog.at_level(logging.DEBUG, logger="app.categorizer.gemini_classifier"):
+        GeminiItemClassifier(db)._call_gemini_batch(batch, db.get_all_categories(), "key", {}, client=client)
+
+    log = caplog.text
+    assert "KS ORG EVOO" in log
+    assert "Kirkland Olive Oil" in log
+    assert "120 in / 30 out" in log

@@ -12,6 +12,8 @@ DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = Path(os.getenv("COSTCO_DB_PATH", str(DATA_DIR / "costco.db")))
+# Level for app.* loggers; DEBUG also logs every Gemini prompt and response
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").strip().upper()
 BROWSER_PROFILE_DIR = DATA_DIR / "browser_profile"
 IMAGES_DIR = DATA_DIR / "images"
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)

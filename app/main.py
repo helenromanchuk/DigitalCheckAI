@@ -1,4 +1,5 @@
 """DigitalCheckAI FastAPI application entry point."""
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -6,11 +7,26 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router as api_router
-from app.config import IMAGES_DIR
+from app.config import IMAGES_DIR, LOG_LEVEL
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _configure_logging() -> None:
+    """Sends app.* log records to the console at LOG_LEVEL; uvicorn only configures its own loggers."""
+    app_logger = logging.getLogger("app")
+    if app_logger.handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    app_logger.addHandler(handler)
+    app_logger.setLevel(logging.getLevelNamesMapping().get(LOG_LEVEL, logging.INFO))
+    app_logger.propagate = False
+
+
+_configure_logging()
 
 app = FastAPI(
     title="DigitalCheckAI",

@@ -2,6 +2,7 @@
 import json
 import logging
 import re
+import time
 from functools import lru_cache
 from typing import Any, Literal
 
@@ -399,6 +400,8 @@ class GeminiItemClassifier:
         prompt = _build_classification_prompt(batch, categories, custom_labels_en)
         batch_schema = _build_batch_schema(categories)
 
+        logger.debug("Запрос к Gemini (%s), товаров: %d:\n%s", model_name, len(batch), prompt)
+        started = time.monotonic()
         response = client.models.generate_content(
             model=model_name,
             contents=prompt,
@@ -409,6 +412,12 @@ class GeminiItemClassifier:
                 temperature=0.1,
             ),
         )
+        if logger.isEnabledFor(logging.DEBUG):
+            usage = getattr(response, "usage_metadata", None)
+            tokens = f"{usage.prompt_token_count} in / {usage.candidates_token_count} out" if usage else "n/a"
+            logger.debug(
+                "Ответ Gemini за %.1f с, токены: %s:\n%s", time.monotonic() - started, tokens, response.text
+            )
 
         parsed_data = json.loads(response.text)
         results_by_id: dict[int, dict[str, str]] = {}
