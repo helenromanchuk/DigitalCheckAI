@@ -1,0 +1,1 @@
+"""DigitalCheckAI application package."""

@@ -1,0 +1,13 @@
+# Keys and local settings
+.env
+
+# Personal data: receipt database, backups, product photos, browser profile with Costco/Safeway sessions
+data/
+pdf/
+*.db
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
