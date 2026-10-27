@@ -9,8 +9,9 @@ from typing import Any, Iterator
 from app.config import DB_PATH, DEFAULT_CATEGORIES
 from app.unit_price import add_unit_prices
 
-# PRAGMA user_version after the one-time re-parse of stored receipts (see init_db)
+# PRAGMA user_version after each one-time data migration (see init_db)
 REPARSE_SCHEMA_VERSION = 1
+ENGLISH_NAMES_SCHEMA_VERSION = 2
 
 
 class Database:
@@ -95,6 +96,10 @@ class Database:
                 );
                 """
             )
+            # Migration: English name of a user-defined category, shown when the UI is in English
+            category_columns = {row["name"] for row in conn.execute("PRAGMA table_info(custom_categories)")}
+            if "name_en" not in category_columns:
+                conn.execute("ALTER TABLE custom_categories ADD COLUMN name_en TEXT NOT NULL DEFAULT ''")
             # Migration: receipt store (costco / safeway) for databases created before Safeway support
             receipt_columns = {row["name"] for row in conn.execute("PRAGMA table_info(receipts)")}
             if "store" not in receipt_columns:
@@ -118,6 +123,38 @@ class Database:
             self.reparse_stored_receipts()
             with self.connect() as conn:
                 conn.execute(f"PRAGMA user_version = {REPARSE_SCHEMA_VERSION}")
+
+        if schema_version < ENGLISH_NAMES_SCHEMA_VERSION:
+            # Migration: names the app generated itself used to be Russian; product names are English now
+            self._translate_generated_names()
+            with self.connect() as conn:
+                conn.execute(f"PRAGMA user_version = {ENGLISH_NAMES_SCHEMA_VERSION}")
+
+    def _translate_generated_names(self) -> None:
+        """Renames parser and fallback catalog rows from the old Russian names to the English ones."""
+        from app.categorizer.gemini_classifier import fallback_categorize_item
+        from app.scraper.parser import COUPON_NAME_PREFIX, FUEL_NAME_PREFIX
+
+        with self.connect() as conn:
+            for old_prefix, new_prefix in (("Топливо Costco (", FUEL_NAME_PREFIX), ("Скидка / купон (", COUPON_NAME_PREFIX)):
+                conn.execute(
+                    """
+                    UPDATE item_catalog
+                    SET clean_name = ? || substr(clean_name, ?)
+                    WHERE is_manual_override = 0 AND classified_by = 'parser' AND clean_name LIKE ? || '%'
+                    """,
+                    (new_prefix, len(old_prefix) + 1, old_prefix),
+                )
+            rows = conn.execute(
+                "SELECT item_number, raw_description FROM item_catalog "
+                "WHERE is_manual_override = 0 AND classified_by = 'fallback'"
+            ).fetchall()
+            for row in rows:
+                result = fallback_categorize_item(row["item_number"], row["raw_description"])
+                conn.execute(
+                    "UPDATE item_catalog SET clean_name = ? WHERE item_number = ?",
+                    (result["clean_name"], row["item_number"]),
+                )
 
     def reparse_stored_receipts(self) -> int:
         """
@@ -167,18 +204,30 @@ class Database:
                 result.append(r["category"])
         return result
 
-    def add_custom_category(self, name: str) -> list[str]:
-        """Adds a new user-defined category."""
+    def add_custom_category(self, name: str, name_en: str = "") -> list[str]:
+        """
+        Adds a new user-defined category. For an existing one, a non-empty name_en sets its English name,
+        so a category added earlier can get a translation too.
+        """
         clean = name.strip()
         if not clean:
             return self.get_all_categories()
         now = datetime.now(timezone.utc).isoformat()
         with self.connect() as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO custom_categories (name, created_at) VALUES (?, ?)",
-                (clean, now),
+                """
+                INSERT INTO custom_categories (name, name_en, created_at) VALUES (?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET name_en = excluded.name_en WHERE excluded.name_en != ''
+                """,
+                (clean, name_en.strip(), now),
             )
         return self.get_all_categories()
+
+    def get_category_labels_en(self) -> dict[str, str]:
+        """English names of user-defined categories that have one."""
+        with self.connect() as conn:
+            rows = conn.execute("SELECT name, name_en FROM custom_categories WHERE name_en != ''").fetchall()
+        return {row["name"]: row["name_en"] for row in rows}
 
     def get_existing_catalog_map(self, item_numbers: list[str]) -> dict[str, dict[str, Any]]:
         """Returns existing item_catalog rows for the given item numbers."""

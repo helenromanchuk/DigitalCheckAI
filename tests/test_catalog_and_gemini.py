@@ -1,7 +1,7 @@
 """Tests for Item # caching in the database, first-time Gemini classification, and manual category changes."""
 from pathlib import Path
 from app.categorizer.gemini_classifier import GeminiItemClassifier
-from app.database import Database
+from app.database import ENGLISH_NAMES_SCHEMA_VERSION, Database
 from app.scraper.parser import parse_any_costco_payload
 
 
@@ -308,7 +308,7 @@ def test_migration_unlocks_groceries_an_old_parser_took_for_fuel(tmp_path: Path)
     assert receipt_type == "warehouse"
     assert {(r["category"], r["classified_by"]) for r in rows} == {("Прочее", "pending")}
     assert {i["item_number"] for i in db.get_pending_items_for_gemini()} == {"1000001", "1000002"}
-    assert version == 1
+    assert version == ENGLISH_NAMES_SCHEMA_VERSION
 
 
 def test_unmatched_coupon_does_not_overwrite_product_with_same_number(tmp_path: Path):
@@ -337,3 +337,45 @@ def test_unmatched_coupon_does_not_overwrite_product_with_same_number(tmp_path: 
         coupon = conn.execute("SELECT classified_by FROM item_catalog WHERE item_number = 'DISCOUNT-222'").fetchone()
     assert (row["clean_name"], row["category"]) == ("Olive Oil", "Бакалея, масла, специи и консервы")
     assert coupon["classified_by"] == "parser"
+
+
+def test_migration_translates_generated_names_to_english(tmp_path: Path):
+    db = Database(tmp_path / "test_costco.db")
+    with db.connect() as conn:
+        for item_number, raw, name, by in (
+            ("800877", "REGULAR", "Топливо Costco (REGULAR)", "parser"),
+            ("DISCOUNT-222", "/ 222", "Скидка / купон (/ 222)", "parser"),
+            ("1", "ORG STRAWBERRIES", "Органическая клубника", "fallback"),
+            ("2", "KS EVOO", "Моё название", "manual"),
+        ):
+            conn.execute(
+                """
+                INSERT INTO item_catalog (item_number, raw_description, clean_name, category, is_manual_override, classified_by, updated_at)
+                VALUES (?, ?, ?, 'Прочее', ?, ?, '2026-10-01')
+                """,
+                (item_number, raw, name, int(by == "manual"), by),
+            )
+        conn.execute("PRAGMA user_version = 1")
+
+    db.init_db()
+
+    with db.connect() as conn:
+        names = dict(conn.execute("SELECT item_number, clean_name FROM item_catalog").fetchall())
+    assert names == {
+        "800877": "Costco Fuel (REGULAR)",
+        "DISCOUNT-222": "Coupon (/ 222)",
+        "1": "Organic Strawberries",
+        "2": "Моё название",
+    }
+
+
+def test_custom_category_english_name_can_be_added_later(tmp_path: Path):
+    db = Database(tmp_path / "test_costco.db")
+    db.add_custom_category("Питомцы")
+    assert db.get_category_labels_en() == {}
+
+    db.add_custom_category("Питомцы", "Pets")
+    db.add_custom_category("Питомцы")  # an empty English name keeps the existing one
+
+    assert db.get_category_labels_en() == {"Питомцы": "Pets"}
+    assert db.get_all_categories().count("Питомцы") == 1

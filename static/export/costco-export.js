@@ -3,11 +3,33 @@
 // on the Account → Orders & Purchases page. Change YEARS_BACK to adjust how far back it goes.
 (async () => {
   const YEARS_BACK = 3;
+  // Message language; the dashboard sets it to its UI language when it copies the script
+  const LANG = "ru";
+  const MESSAGES = {
+    ru: {
+      signIn: "войдите в аккаунт Costco и откройте Orders & Purchases.",
+      http: (status) => `Costco API вернул HTTP ${status}`,
+      network: "Сетевая ошибка",
+      receipt: (date, type) => `чек ${date} (${type})`,
+      order: (number) => `онлайн-заказ ${number}`,
+      done: (receipts, orders) => `готово, чеков: ${receipts}, онлайн-заказов: ${orders}`,
+    },
+    en: {
+      signIn: "sign in to Costco and open Orders & Purchases.",
+      http: (status) => `Costco API returned HTTP ${status}`,
+      network: "Network error",
+      receipt: (date, type) => `receipt ${date} (${type})`,
+      order: (number) => `online order ${number}`,
+      done: (receipts, orders) => `done, receipts: ${receipts}, online orders: ${orders}`,
+    },
+  };
+  const msg = MESSAGES[LANG] || MESSAGES.en;
+
   const URL_GQL = "https://ecom-api.costco.com/ebusiness/order/v1/orders/graphql";
   const token = localStorage.getItem("idToken");
   const clientId = localStorage.getItem("clientID") || "4900eb1f-0c10-4bd9-99c3-c59e6c1ecebf";
   if (!token) {
-    console.error("DigitalCheckAI: войдите в аккаунт Costco и откройте Orders & Purchases.");
+    console.error(`DigitalCheckAI: ${msg.signIn}`);
     return;
   }
 
@@ -25,12 +47,12 @@
     };
     for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
     xhr.onload = () => {
-      if (xhr.status !== 200) return reject(new Error(`Costco API вернул HTTP ${xhr.status}`));
+      if (xhr.status !== 200) return reject(new Error(msg.http(xhr.status)));
       const json = JSON.parse(xhr.responseText);
       if (json.errors) return reject(new Error(json.errors.map(e => e.message).join("; ")));
       resolve(json.data || {});
     };
-    xhr.onerror = () => reject(new Error("Сетевая ошибка"));
+    xhr.onerror = () => reject(new Error(msg.network));
     xhr.send(JSON.stringify({ query, variables }));
   });
 
@@ -76,7 +98,7 @@
       if (seenBarcodes.has(r.transactionBarcode)) continue;
       seenBarcodes.add(r.transactionBarcode);
       const docType = /fuel/i.test(r.documentType) || /gas/i.test(r.receiptType) ? "fuel" : "warehouse";
-      console.log(`DigitalCheckAI: чек ${String(r.transactionDateTime).slice(0, 10)} (${r.receiptType})`);
+      console.log(`DigitalCheckAI: ${msg.receipt(String(r.transactionDateTime).slice(0, 10), r.receiptType)}`);
       const detail = await gql(RECEIPT_DETAIL, { barcode: r.transactionBarcode, documentType: docType });
       const full = ((detail.receiptsWithCounts || {}).receipts || [])[0];
       if (full) receipts.push(full);
@@ -93,7 +115,7 @@
       for (const o of batch) {
         if (seenOrders.has(o.orderNumber)) continue;
         seenOrders.add(o.orderNumber);
-        console.log(`DigitalCheckAI: онлайн-заказ ${o.orderNumber}`);
+        console.log(`DigitalCheckAI: ${msg.order(o.orderNumber)}`);
         const detail = await gql(ONLINE_DETAIL, { orderNumbers: [o.orderNumber] });
         const full = [].concat(detail.getOrderDetails || [])[0];
         if (full) orders.push(full);
@@ -108,5 +130,5 @@
   link.href = URL.createObjectURL(blob);
   link.download = "costco-receipts.json";
   link.click();
-  console.log(`DigitalCheckAI: готово, чеков: ${receipts.length}, онлайн-заказов: ${orders.length}`);
+  console.log(`DigitalCheckAI: ${msg.done(receipts.length, orders.length)}`);
 })();

@@ -14,6 +14,7 @@ import time
 from typing import Any
 
 from app.config import BROWSER_PROFILE_DIR
+from app.errors import AppError
 from app.scraper.parser import parse_online_order, parse_warehouse_or_gas_receipt
 
 logger = logging.getLogger(__name__)
@@ -198,7 +199,7 @@ _TOKEN_TTL_JS = """
 """
 
 
-class CostcoApiError(RuntimeError):
+class CostcoApiError(AppError):
     """Error response from the Costco GraphQL API."""
 
 
@@ -338,7 +339,7 @@ class CostcoClient:
         reopened_orders_page = False
         while time.time() < deadline:
             if page.is_closed():
-                raise RuntimeError("Окно браузера закрыто до завершения синхронизации.")
+                raise AppError("browser_closed", "The browser window was closed before the sync finished.")
             try:
                 ttl = page.evaluate(_TOKEN_TTL_JS)
                 cur_url = page.url
@@ -364,9 +365,9 @@ class CostcoClient:
 
             page.wait_for_timeout(1500)
 
-        raise TimeoutError(
-            "Не удалось получить токен авторизации Costco.com. "
-            "Пожалуйста, войдите в аккаунт в открывшемся окне браузера."
+        raise AppError(
+            "costco_login_timeout",
+            "Could not get a Costco.com auth token. Please sign in in the browser window that opened.",
         )
 
     def _graphql(self, page: Any, query: str, variables: dict[str, Any]) -> dict[str, Any]:
@@ -384,15 +385,26 @@ class CostcoClient:
         status = resp.get("status")
         text = resp.get("text") or ""
         if status != 200:
-            hint = " (вероятно, запрос отклонила защита Kasada)" if status in (403, 404, 429) else ""
-            raise CostcoApiError(f"Costco GraphQL вернул HTTP {status}{hint}: {text[:200]}")
+            if status in (403, 404, 429):
+                raise CostcoApiError(
+                    "costco_blocked",
+                    f"Costco GraphQL returned HTTP {status} (the Kasada protection probably rejected the request): "
+                    f"{text[:200]}",
+                    status=status,
+                    body=text[:200],
+                )
+            raise CostcoApiError(
+                "costco_http", f"Costco GraphQL returned HTTP {status}: {text[:200]}", status=status, body=text[:200]
+            )
         try:
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise CostcoApiError(f"Costco GraphQL вернул не JSON: {text[:200]}") from exc
+            raise CostcoApiError(
+                "costco_not_json", f"Costco GraphQL returned non-JSON: {text[:200]}", body=text[:200]
+            ) from exc
         if payload.get("errors"):
             messages = "; ".join(str(e.get("message")) for e in payload["errors"])
-            raise CostcoApiError(f"Ошибка Costco GraphQL: {messages}")
+            raise CostcoApiError("costco_graphql", f"Costco GraphQL error: {messages}", messages=messages)
         time.sleep(REQUEST_PAUSE_SECONDS)
         return payload.get("data") or {}
 

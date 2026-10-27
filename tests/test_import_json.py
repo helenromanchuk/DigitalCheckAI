@@ -49,7 +49,7 @@ def test_import_safeway_list_without_items_is_rejected(tmp_path: Path, monkeypat
 
     res = _upload(client, list_only)
     assert res.status_code == 400
-    assert "без товаров" in res.json()["detail"]
+    assert res.json()["detail"]["code"] == "safeway_list_only"
 
     app.dependency_overrides.clear()
 

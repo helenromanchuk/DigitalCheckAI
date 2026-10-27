@@ -16,7 +16,7 @@ GEMINI_TIMEOUT_MS = 120_000
 class CategorizedItemSchema(BaseModel):
     item_number: str = Field(description="Артикул товара Costco (Item #)")
     clean_name: str = Field(
-        description="Полное расшифрованное и понятное название товара (например, 'Kirkland Signature Organic Extra Virgin Olive Oil (2L)')"
+        description="Полное расшифрованное и понятное название товара на английском (например, 'Kirkland Signature Organic Extra Virgin Olive Oil (2L)')"
     )
     category: str = Field(description="Точное название категории из предоставленного списка")
 
@@ -30,97 +30,97 @@ FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
     (
         ["UNLEADED", "GASOLINE", "FUEL", "DIESEL"],
         FUEL_CATEGORY,
-        {"UNLEADED GASOLINE 87": "Бензин Regular Unleaded 87 (Costco Gas)"},
+        {"UNLEADED GASOLINE 87": "Costco Regular Unleaded 87 Gasoline"},
     ),
     (
         ["RIBEYE", "SALMON", "BEEF", "PORK", "CHICKEN", "SHRIMP", "STEAK", "LAMB", "TURKEY", "BACON"],
         "Мясо, птица и морепродукты",
         {
-            "USDA CHOICE RIBEYE": "Стейки говяжьи USDA Choice Ribeye",
-            "WILD ALASKAN SALMON": "Дикий аляскинский лосось (филе)",
+            "USDA CHOICE RIBEYE": "USDA Choice Ribeye Steaks",
+            "WILD ALASKAN SALMON": "Wild Alaskan Salmon Fillet",
         },
     ),
     (
         ["ROTISSERIE", "CROISSANT", "BAGEL", "MUFFIN", "BREAD", "DELI", "PIZZA", "CAKE"],
         "Выпечка, хлеб и готовая еда (Deli)",
         {
-            "ROTISSERIE CHKN": "Курица-гриль Kirkland Rotisserie Chicken",
-            "CROISSANTS 12CT": "Круассаны свежей выпечки Costco (12 шт.)",
+            "ROTISSERIE CHKN": "Kirkland Signature Rotisserie Chicken",
+            "CROISSANTS 12CT": "Costco Bakery Croissants (12 ct)",
         },
     ),
     (
         ["STRAWBERR", "AVOCADO", "BANANA", "APPLE", "SPINACH", "SALAD", "TOMATO", "BLUEBERR", "GRAPE", "PRODUCE"],
         "Овощи, фрукты и ягоды",
         {
-            "ORG STRAWBERRIES": "Органическая клубника",
-            "ORG AVOCADOS 6CT": "Органические авокадо (6 шт.)",
+            "ORG STRAWBERRIES": "Organic Strawberries",
+            "ORG AVOCADOS 6CT": "Organic Avocados (6 ct)",
         },
     ),
     (
         ["EGGS", "BUTTER", "MILK", "CHEESE", "YOGURT", "CREAM"],
         "Молочные продукты, сыр и яйца",
         {
-            "KS ORG EGGS 24CT": "Органические яйца Kirkland Signature (24 шт.)",
-            "KERRYGOLD BUTTER": "Сливочное масло Kerrygold Pure Irish Butter",
+            "KS ORG EGGS 24CT": "Kirkland Signature Organic Eggs (24 ct)",
+            "KERRYGOLD BUTTER": "Kerrygold Pure Irish Butter",
         },
     ),
     (
         ["EVOO", "OLIVE OIL", "RICE", "PASTA", "COFFEE", "SAUCE", "HONEY", "SPICE", "FLOUR"],
         "Бакалея, масла, специи и консервы",
         {
-            "KS ORG EVOO 2L BOTTLE": "Оливковое масло первого отжима Kirkland Organic EVOO (2 л)",
-            "KS ORG EVOO": "Оливковое масло первого отжима Kirkland Organic EVOO",
+            "KS ORG EVOO 2L BOTTLE": "Kirkland Signature Organic Extra Virgin Olive Oil (2 L)",
+            "KS ORG EVOO": "Kirkland Signature Organic Extra Virgin Olive Oil",
         },
     ),
     (
         ["NUTS", "CHOC", "CHIPS", "COOKIE", "SNACK", "WATER", "SODA", "JUICE"],
         "Снеки, сладости, орехи и напитки",
         {
-            "KS MIXED NUTS 40OZ": "Смесь орехов Kirkland Signature Mixed Nuts (1.13 кг)",
+            "KS MIXED NUTS 40OZ": "Kirkland Signature Mixed Nuts (40 oz)",
         },
     ),
     (
         ["CHARMIN", "BATH TISSUE", "TIDE", "BOUNTY", "CASCADE", "DETERGENT", "TRASH BAG", "PAPER TOWEL"],
         "Бытовая химия, бумага и уборка",
         {
-            "CHARMIN ULTRA SOFT": "Туалетная бумага Charmin Ultra Soft",
-            "KS BATH TISSUE": "Туалетная бумага Kirkland Signature Bath Tissue",
-            "TIDE PODS 152CT": "Капсулы для стирки Tide PODS (152 шт.)",
+            "CHARMIN ULTRA SOFT": "Charmin Ultra Soft Toilet Paper",
+            "KS BATH TISSUE": "Kirkland Signature Bath Tissue",
+            "TIDE PODS 152CT": "Tide PODS Laundry Detergent (152 ct)",
         },
     ),
     (
         ["COQ10", "VITAMIN", "ADVIL", "TYLENOL", "SHAMPOO", "TOOTHPASTE", "LOTION", "ALLERGY", "SUNSCREEN"],
         "Здоровье, аптека, витамины и гигиена",
         {
-            "COQ10 300MG 100CT": "Коэнзим Q10 Kirkland Signature 300 мг (100 капсул)",
+            "COQ10 300MG 100CT": "Kirkland Signature CoQ10 300 mg (100 softgels)",
         },
     ),
     (
         ["PROSECCO", "WINE", "VODKA", "BEER", "WHISKEY", "TEQUILA", "CHAMPAGNE"],
         "Алкоголь",
         {
-            "KIRKLAND PROSECCO": "Игристое вино Kirkland Signature Asolo Prosecco Superiore DOCG",
+            "KIRKLAND PROSECCO": "Kirkland Signature Asolo Prosecco Superiore DOCG",
         },
     ),
     (
         ["AIRPODS", "IPAD", "MACBOOK", "TV", "SAMSUNG", "SONY", "USB", "BATTERY", "CHARGER"],
         "Электроника и техника",
         {
-            "APPLE AIRPODS PRO 2ND GEN USB-C": "Наушники Apple AirPods Pro 2 (USB-C)",
+            "APPLE AIRPODS PRO 2ND GEN USB-C": "Apple AirPods Pro 2 (USB-C)",
         },
     ),
     (
         ["JEANS", "LEVIS", "SHIRT", "JACKET", "SOCKS", "SHOES", "PANTS", "HOODIE"],
         "Одежда и обувь",
         {
-            "LEVIS MENS JEANS": "Мужские джинсы Levi's",
+            "LEVIS MENS JEANS": "Levi's Men's Jeans",
         },
     ),
     (
         ["PYREX", "STORAGE", "PAN", "TOWEL", "PILLOW", "BLANKET", "BLENDER"],
         "Товары для дома, кухни и сада",
         {
-            "PYREX GLASS STORAGE": "Набор стеклянных контейнеров для хранения Pyrex",
+            "PYREX GLASS STORAGE": "Pyrex Glass Food Storage Set",
         },
     ),
 ]
@@ -267,7 +267,7 @@ class GeminiItemClassifier:
             "'ORG' = 'Organic', 'EVOO' = 'Extra Virgin Olive Oil', 'CHKN' = 'Chicken').\n\n"
             "Для каждого товара из списка:\n"
             "1. Расшифруй сокращённое чековое описание `raw_description` (с учётом артикула `item_number` и цены) "
-            "в понятное полное название товара `clean_name`.\n"
+            "в понятное полное название товара `clean_name` на английском языке.\n"
             "2. Назначь наиболее подходящую категорию `category` СТРОГО из следующего списка разрешённых категорий:\n"
             f"{json.dumps(categories, ensure_ascii=False, indent=2)}\n\n"
             "Список товаров для расшифровки и категоризации:\n"

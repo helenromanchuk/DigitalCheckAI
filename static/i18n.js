@@ -143,6 +143,21 @@ const I18N = {
     "sync.opening": "⏳ Открываем браузер {site}...",
     "sync.browserOpened": "Открыто окно браузера Playwright. Войдите в аккаунт {site} (если требуется 2FA) — чеки выгрузятся автоматически.",
     "sync.error": "Ошибка синхронизации",
+    "error.sync_failed": "Ошибка синхронизации с {site}: {reason}",
+    "error.browser_closed": "Окно браузера закрыто до завершения синхронизации.",
+    "error.costco_login_timeout": "Не удалось получить токен авторизации Costco.com. Пожалуйста, войдите в аккаунт в открывшемся окне браузера.",
+    "error.safeway_login_timeout": "Не удалось дождаться входа в аккаунт Safeway. Пожалуйста, войдите в аккаунт в открывшемся окне браузера.",
+    "error.costco_blocked": "Costco GraphQL вернул HTTP {status} (вероятно, запрос отклонила защита Kasada): {body}",
+    "error.costco_http": "Costco GraphQL вернул HTTP {status}: {body}",
+    "error.costco_not_json": "Costco GraphQL вернул не JSON: {body}",
+    "error.costco_graphql": "Ошибка Costco GraphQL: {messages}",
+    "error.safeway_http": "Safeway API вернул HTTP {status}: {body}",
+    "error.safeway_not_json": "Safeway API вернул не JSON: {body}",
+    "error.safeway_list_only": "Это список покупок Safeway без товаров. Нужны детали чеков — воспользуйтесь скриптом выгрузки из справки к импорту.",
+    "error.invalid_json": "Некорректный JSON-файл: {error}",
+    "error.no_receipts": "В файле не найдено чеков Costco или Safeway.",
+    "error.item_not_found": "Артикул {item} не найден в справочнике.",
+    "error.unknown": "{message}",
     "sync.success": "Успешно загружено чеков: {fetched} (новых: {inserted}). Расшифровано новых Item#: {newItems} ({provider}).",
 
     "import.importing": "Импортируем файл {file}...",
@@ -182,6 +197,9 @@ const I18N = {
     "newCat.title": "Добавить свою категорию",
     "newCat.label": "Название категории",
     "newCat.placeholder": "Например: Детские товары или Питомцы",
+    "newCat.enLabel": "Название на английском (необязательно)",
+    "newCat.enPlaceholder": "Например: Kids или Pets",
+    "newCat.enHint": "Показывается, когда интерфейс на английском. Чтобы перевести уже созданную категорию, введите её название ещё раз вместе с английским.",
     "newCat.added": "Категория «{name}» добавлена! Теперь её можно выбрать для любого товара."
   },
 
@@ -326,6 +344,21 @@ const I18N = {
     "sync.opening": "⏳ Opening the {site} browser...",
     "sync.browserOpened": "A Playwright browser window is open. Sign in to {site} (complete 2FA if asked) and your receipts will download automatically.",
     "sync.error": "Sync failed",
+    "error.sync_failed": "Sync with {site} failed: {reason}",
+    "error.browser_closed": "The browser window was closed before the sync finished.",
+    "error.costco_login_timeout": "Could not get a Costco.com auth token. Please sign in in the browser window that opened.",
+    "error.safeway_login_timeout": "Timed out waiting for the Safeway sign-in. Please sign in in the browser window that opened.",
+    "error.costco_blocked": "Costco GraphQL returned HTTP {status} (the Kasada protection probably rejected the request): {body}",
+    "error.costco_http": "Costco GraphQL returned HTTP {status}: {body}",
+    "error.costco_not_json": "Costco GraphQL returned non-JSON: {body}",
+    "error.costco_graphql": "Costco GraphQL error: {messages}",
+    "error.safeway_http": "Safeway API returned HTTP {status}: {body}",
+    "error.safeway_not_json": "Safeway API returned non-JSON: {body}",
+    "error.safeway_list_only": "This is a Safeway purchase list without items. Receipt details are needed: use the export script from the import help.",
+    "error.invalid_json": "Invalid JSON file: {error}",
+    "error.no_receipts": "No Costco or Safeway receipts found in the file.",
+    "error.item_not_found": "Item {item} not found in the catalog.",
+    "error.unknown": "{message}",
     "sync.success": "Receipts downloaded: {fetched} (new: {inserted}). New Item #s decoded: {newItems} ({provider}).",
 
     "import.importing": "Importing {file}...",
@@ -351,7 +384,7 @@ const I18N = {
     "help.step1": "Open the store's site in Chrome and sign in: <b>costco.com</b> → Account → <b>Orders &amp; Purchases</b>, or <b>safeway.com</b> → Account → <b>Purchases</b>.",
     "help.step2": "Click a button below to copy the script to the clipboard.",
     "help.step3": "On the store's page press <b>F12</b>, open the <b>Console</b> tab, paste the script (<b>Ctrl+V</b>) and press <b>Enter</b>. If Chrome blocks pasting and asks you to type <code class=\"bg-slate-100 px-1 rounded\">allow pasting</code>, type that phrase, press Enter, and paste the script again.",
-    "help.step4": "Wait for the “DigitalCheckAI: готово” message. The browser saves <code class=\"bg-slate-100 px-1 rounded\">costco-receipts.json</code> or <code class=\"bg-slate-100 px-1 rounded\">safeway-receipts.json</code> to Downloads.",
+    "help.step4": "Wait for the “DigitalCheckAI: done” message. The browser saves <code class=\"bg-slate-100 px-1 rounded\">costco-receipts.json</code> or <code class=\"bg-slate-100 px-1 rounded\">safeway-receipts.json</code> to Downloads.",
     "help.step5": "Back here, click <b>“📂 Import JSON”</b> and choose that file.",
     "help.costcoDesc": "Warehouse, gas, and online orders for the last 3 years (about a minute per 100 receipts).",
     "help.copyCostco": "Copy the Costco script",
@@ -365,6 +398,9 @@ const I18N = {
     "newCat.title": "Add a custom category",
     "newCat.label": "Category name",
     "newCat.placeholder": "e.g. Kids or Pets",
+    "newCat.enLabel": "English name (optional)",
+    "newCat.enPlaceholder": "e.g. Kids or Pets",
+    "newCat.enHint": "Shown when the interface is in English. To translate an existing category, enter its name again together with the English one.",
     "newCat.added": "Category “{name}” added! You can now assign it to any item."
   }
 };
@@ -405,8 +441,12 @@ function t(key, params = {}) {
   return template.replace(/\{(\w+)\}/g, (match, name) => (name in params ? String(params[name]) : match));
 }
 
+// English names of the user's own categories, from /api/config
+let customCategoryLabelsEn = {};
+
 function categoryLabel(category) {
-  return currentLang === "en" ? CATEGORY_LABELS_EN[category] || category : category;
+  if (currentLang !== "en") return category;
+  return CATEGORY_LABELS_EN[category] || customCategoryLabelsEn[category] || category;
 }
 
 function applyStaticTranslations() {

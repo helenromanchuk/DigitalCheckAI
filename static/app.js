@@ -39,6 +39,17 @@ function formatUnitPrice(val) {
   return `$${Number(val).toFixed(digits)}`;
 }
 
+// The API returns errors as {code, params, cause?, message}; show them in the UI language.
+// An unknown code falls back to the API's English message
+function apiErrorText(detail, fallbackKey) {
+  if (!detail || Array.isArray(detail)) return t(fallbackKey);
+  if (typeof detail === "string") return detail;
+  const params = { ...(detail.params || {}) };
+  if (detail.cause) params.reason = apiErrorText(detail.cause, fallbackKey);
+  const key = `error.${detail.code}`;
+  return key in I18N[currentLang] ? t(key, params) : detail.message || t(fallbackKey);
+}
+
 function showBanner(message, type = "info") {
   const banner = document.getElementById("statusBanner");
   const inner = document.getElementById("statusBannerInner");
@@ -134,6 +145,7 @@ async function loadConfig() {
 
 function renderConfig(data) {
   availableCategories = data.categories || [];
+  customCategoryLabelsEn = data.category_labels_en || {};
 
   const dot = document.getElementById("geminiStatusDot");
   const txt = document.getElementById("geminiStatusText");
@@ -767,7 +779,7 @@ async function runStoreSync(url, buttonId, siteName) {
     });
     const data = await res.json();
     if (!res.ok) {
-      throw new Error(data.detail || t("sync.error"));
+      throw new Error(apiErrorText(data.detail, "sync.error"));
     }
     showBanner(
       t("sync.success", {
@@ -813,7 +825,7 @@ async function importJsonFile(event) {
     );
     await refreshAll();
   } else {
-    showBanner(data.detail || t("import.error"), "error");
+    showBanner(apiErrorText(data.detail, "import.error"), "error");
   }
 }
 
@@ -884,7 +896,9 @@ async function copyExportScript(store) {
   const name = store === "safeway" ? "Safeway" : "Costco";
   try {
     const res = await fetch(`/static/export/${store}-export.js`);
-    await navigator.clipboard.writeText(await res.text());
+    // The script prints its console messages in the dashboard's language
+    const script = (await res.text()).replace('const LANG = "ru";', `const LANG = "${currentLang}";`);
+    await navigator.clipboard.writeText(script);
     status.className = "text-xs font-medium text-emerald-700";
     status.textContent = t("help.copied", { store: name });
   } catch (err) {
@@ -903,14 +917,16 @@ function closeNewCategoryModal() {
 
 async function createNewCategory() {
   const name = document.getElementById("newCategoryInput").value.trim();
+  const nameEn = document.getElementById("newCategoryEnInput").value.trim();
   if (!name) return;
   const res = await fetch("/api/categories", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name })
+    body: JSON.stringify({ name, name_en: nameEn })
   });
   if (res.ok) {
     document.getElementById("newCategoryInput").value = "";
+    document.getElementById("newCategoryEnInput").value = "";
     closeNewCategoryModal();
     showBanner(t("newCat.added", { name }), "success");
     await refreshAll();

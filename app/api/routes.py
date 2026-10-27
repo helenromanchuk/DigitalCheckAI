@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from app.categorizer.gemini_classifier import GeminiItemClassifier
 from app.config import get_gemini_api_key, get_gemini_model, save_gemini_api_key
 from app.database import Database
+from app.errors import AppError, error_detail
 from app.scraper.costco_client import CostcoClient
 from app.scraper.images import download_missing_images
 from app.scraper.parser import parse_any_costco_payload
@@ -17,6 +18,17 @@ from app.scraper.safeway_client import SafewayClient, parse_safeway_payload
 router = APIRouter(prefix="/api", tags=["costco"])
 
 _db_instance: Database | None = None
+
+
+def _sync_error_detail(site: str, exc: BaseException) -> dict[str, Any]:
+    """A sync failure with its cause; the UI shows both in its own language."""
+    cause = error_detail(exc)
+    return {
+        "code": "sync_failed",
+        "params": {"site": site},
+        "cause": cause,
+        "message": f"Sync with {site} failed: {cause['message']}",
+    }
 
 
 def get_db() -> Database:
@@ -39,6 +51,7 @@ class UpdateItemCategoryRequest(BaseModel):
 
 class AddCategoryRequest(BaseModel):
     name: str = Field(..., min_length=1)
+    name_en: str = ""
 
 
 class SetGeminiKeyRequest(BaseModel):
@@ -55,6 +68,7 @@ def get_app_config(db: Database = Depends(get_db)) -> dict[str, Any]:
         "has_gemini_key": has_key,
         "gemini_model": get_gemini_model(),
         "categories": db.get_all_categories(),
+        "category_labels_en": db.get_category_labels_en(),
         "pending_gemini_items_count": len(pending),
     }
 
@@ -82,8 +96,8 @@ def create_custom_category(
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
     """Adds a new user-defined category."""
-    categories = db.add_custom_category(payload.name)
-    return {"categories": categories}
+    categories = db.add_custom_category(payload.name, payload.name_en)
+    return {"categories": categories, "category_labels_en": db.get_category_labels_en()}
 
 
 @router.post("/sync")
@@ -104,7 +118,7 @@ async def sync_from_costco(
             timeout_seconds=payload.timeout_seconds,
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Ошибка синхронизации с Costco.com: {exc}") from exc
+        raise HTTPException(status_code=500, detail=_sync_error_detail("Costco.com", exc)) from exc
 
     upsert_info = db.upsert_receipts(parsed_receipts)
     classifier = GeminiItemClassifier(db)
@@ -138,7 +152,7 @@ async def sync_from_safeway(
             timeout_seconds=payload.timeout_seconds,
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Ошибка синхронизации с Safeway.com: {exc}") from exc
+        raise HTTPException(status_code=500, detail=_sync_error_detail("Safeway.com", exc)) from exc
 
     upsert_info = db.upsert_receipts(parsed_receipts)
     classifier = GeminiItemClassifier(db)
@@ -166,18 +180,24 @@ async def import_receipts_json(
         raw_bytes = await file.read()
         data = json.loads(raw_bytes.decode("utf-8-sig"))
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Некорректный JSON-файл: {exc}") from exc
+        raise HTTPException(
+            status_code=400,
+            detail=AppError("invalid_json", f"Invalid JSON file: {exc}", error=str(exc)).to_detail(),
+        ) from exc
 
     try:
         parsed_receipts = parse_safeway_payload(data)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except AppError as exc:
+        raise HTTPException(status_code=400, detail=exc.to_detail()) from exc
     store = "safeway"
     if not parsed_receipts:
         parsed_receipts = parse_any_costco_payload(data)
         store = "costco"
     if not parsed_receipts:
-        raise HTTPException(status_code=400, detail="В файле не найдено чеков Costco или Safeway.")
+        raise HTTPException(
+            status_code=400,
+            detail=AppError("no_receipts", "No Costco or Safeway receipts found in the file.").to_detail(),
+        )
 
     upsert_info = db.upsert_receipts(parsed_receipts)
     classifier = GeminiItemClassifier(db)
@@ -257,7 +277,12 @@ def update_item_category(
         clean_name=payload.clean_name,
     )
     if not updated:
-        raise HTTPException(status_code=404, detail=f"Артикул {item_number} не найден в справочнике.")
+        raise HTTPException(
+            status_code=404,
+            detail=AppError(
+                "item_not_found", f"Item {item_number} not found in the catalog.", item=item_number
+            ).to_detail(),
+        )
     return {"status": "ok", "item": updated, "categories": db.get_all_categories()}
 
 

@@ -4,6 +4,11 @@ from typing import Any
 
 from app.config import FUEL_CATEGORY
 
+# Names for items the parser categorizes itself. Product names are stored in English, like the names
+# Gemini decodes, so the catalog has one language whatever the UI language is
+FUEL_NAME_PREFIX = "Costco Fuel ("
+COUPON_NAME_PREFIX = "Coupon ("
+
 
 # A coupon's reference to its item on a Costco receipt: "TPD/1234567", "/1234567", "/ 1234567" or "#1234567".
 # Only at the start of the description; otherwise a return like "KS TOWEL 12/120CT" is taken for a coupon.
@@ -91,7 +96,7 @@ def spread_discount(items: list[dict[str, Any]], amount: float, base_key: str) -
 
 def _mark_fuel(item_entry: dict[str, Any]) -> None:
     item_entry["default_category"] = FUEL_CATEGORY
-    item_entry["default_clean_name"] = f"Топливо Costco ({item_entry['raw_description']})"
+    item_entry["default_clean_name"] = f"{FUEL_NAME_PREFIX}{item_entry['raw_description']})"
 
 
 def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any] | None:
@@ -254,7 +259,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
                 "tax_flag": str(raw_item.get("taxFlag") or ""),
                 "is_weight": False,
                 "default_category": "Прочее",
-                "default_clean_name": f"Скидка / купон ({desc})",
+                "default_clean_name": f"{COUPON_NAME_PREFIX}{desc})",
             }
         )
 

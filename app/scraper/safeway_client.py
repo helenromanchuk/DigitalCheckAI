@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 from app.config import BROWSER_PROFILE_DIR, FUEL_CATEGORY
+from app.errors import AppError
 from app.scraper.costco_client import _sync_lock
 from app.scraper.parser import spread_discount
 
@@ -54,7 +55,7 @@ _IS_LOGGED_IN_JS = """
 """
 
 
-class SafewayApiError(RuntimeError):
+class SafewayApiError(AppError):
     """Error response from the Safeway receipts API."""
 
 
@@ -164,9 +165,10 @@ def parse_safeway_payload(payload: Any) -> list[dict[str, Any]]:
 
     with_items = [e for e in safeway_entries if isinstance(e.get("items"), list)]
     if not with_items:
-        raise ValueError(
-            "Это список покупок Safeway без товаров. Нужны детали чеков — "
-            "воспользуйтесь скриптом выгрузки из справки к импорту."
+        raise AppError(
+            "safeway_list_only",
+            "This is a Safeway purchase list without items. Receipt details are needed: "
+            "use the export script from the import help.",
         )
     return [r for r in (parse_safeway_receipt(e) for e in with_items) if r]
 
@@ -250,7 +252,7 @@ class SafewayClient:
         reopened_orders_page = False
         while time.time() < deadline:
             if page.is_closed():
-                raise RuntimeError("Окно браузера закрыто до завершения синхронизации.")
+                raise AppError("browser_closed", "The browser window was closed before the sync finished.")
             try:
                 logged_in = page.evaluate(_IS_LOGGED_IN_JS)
                 cur_url = page.url
@@ -267,9 +269,9 @@ class SafewayClient:
 
             page.wait_for_timeout(1500)
 
-        raise TimeoutError(
-            "Не удалось дождаться входа в аккаунт Safeway. "
-            "Пожалуйста, войдите в аккаунт в открывшемся окне браузера."
+        raise AppError(
+            "safeway_login_timeout",
+            "Timed out waiting for the Safeway sign-in. Please sign in in the browser window that opened.",
         )
 
     def _call(self, page: Any, params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -281,10 +283,14 @@ class SafewayClient:
         status = resp.get("status")
         text = resp.get("text") or ""
         if status != 200:
-            raise SafewayApiError(f"Safeway API вернул HTTP {status}: {text[:200]}")
+            raise SafewayApiError(
+                "safeway_http", f"Safeway API returned HTTP {status}: {text[:200]}", status=status, body=text[:200]
+            )
         try:
             payload = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise SafewayApiError(f"Safeway API вернул не JSON: {text[:200]}") from exc
+            raise SafewayApiError(
+                "safeway_not_json", f"Safeway API returned non-JSON: {text[:200]}", body=text[:200]
+            ) from exc
         time.sleep(REQUEST_PAUSE_SECONDS)
         return payload.get("receipts") or []
