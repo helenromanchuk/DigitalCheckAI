@@ -23,7 +23,6 @@ def _configure_logging() -> None:
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     app_logger.addHandler(handler)
     app_logger.setLevel(logging.getLevelNamesMapping().get(LOG_LEVEL, logging.INFO))
-    app_logger.propagate = False
 
 
 _configure_logging()

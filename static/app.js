@@ -139,13 +139,17 @@ function setStore(store) {
 
 async function loadConfig() {
   const res = await fetch("/api/config");
+  if (!res.ok) {
+    showBanner(t("config.loadFailed"), "error");
+    return;
+  }
   lastConfig = await res.json();
   renderConfig(lastConfig);
 }
 
 function renderConfig(data) {
   availableCategories = data.categories || [];
-  customCategoryLabelsEn = data.category_labels_en || {};
+  categoryLabelsEn = data.category_labels_en || {};
 
   const dot = document.getElementById("geminiStatusDot");
   const txt = document.getElementById("geminiStatusText");
@@ -930,6 +934,9 @@ async function createNewCategory() {
     closeNewCategoryModal();
     showBanner(t("newCat.added", { name }), "success");
     await refreshAll();
+  } else {
+    const body = await res.json().catch(() => ({}));
+    showBanner(apiErrorText(body.detail, "newCat.failed"), "error");
   }
 }
 

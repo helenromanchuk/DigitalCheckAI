@@ -2,6 +2,7 @@
 import json
 import logging
 import re
+import time
 from functools import lru_cache
 from typing import Any, Literal
 
@@ -109,7 +110,8 @@ SYSTEM_INSTRUCTION = (
 
 
 @lru_cache(maxsize=16)
-def _build_batch_schema_cached(categories: tuple[str, ...]) -> type[BaseModel]:
+def _build_batch_schema(categories: tuple[str, ...]) -> type[BaseModel]:
+    """Builds (or returns cached) a batch response schema whose category field is restricted to allowed categories."""
     category_desc = CategorizedItemSchema.model_fields["category"].description
     item_model = create_model(
         "DynamicCategorizedItemSchema",
@@ -121,11 +123,6 @@ def _build_batch_schema_cached(categories: tuple[str, ...]) -> type[BaseModel]:
         __base__=CategorizedBatchSchema,
         items=(list[item_model], ...),
     )
-
-
-def _build_batch_schema(categories: list[str] | tuple[str, ...]) -> type[BaseModel]:
-    """Builds (or returns cached) a batch response schema whose category field is restricted to allowed categories."""
-    return _build_batch_schema_cached(tuple(categories))
 
 
 def _build_classification_prompt(
@@ -367,36 +364,41 @@ class GeminiItemClassifier:
 
         if not api_key or api_key == "your_gemini_api_key_here":
             logger.info("GEMINI_API_KEY не задан — используется локальный резервный классификатор.")
-            fallback_results = [
-                fallback_categorize_item(str(i["item_number"]), str(i.get("raw_description", "")))
-                for i in items
-            ]
-            saved = self.db.save_categorized_items(fallback_results, classified_by="fallback")
-            return {"classified_count": saved, "provider": "fallback"}
+            return {"classified_count": self._save_fallback(items), "provider": "fallback"}
 
-        custom_labels_en: dict[str, str] | None = None
-        client: Any = None
+        try:
+            custom_labels_en = self.db.get_category_labels_en()
+            client = _make_gemini_client(api_key)
+        except Exception as exc:
+            logger.warning("Не удалось подготовить вызов Gemini API (%s), применяем fallback.", exc)
+            return {"classified_count": self._save_fallback(items), "provider": "fallback"}
+
         total_saved = 0
         for start in range(0, len(items), self.batch_size):
             batch = items[start : start + self.batch_size]
             try:
-                if custom_labels_en is None:
-                    custom_labels_en = self.db.get_category_labels_en()
-                if client is None:
-                    client = _make_gemini_client(api_key)
                 batch_results = self._call_gemini_batch(batch, categories, client, custom_labels_en)
-                saved = self.db.save_categorized_items(batch_results, classified_by="gemini")
-                total_saved += saved
+                total_saved += self.db.save_categorized_items(batch_results, classified_by="gemini")
             except Exception as exc:
                 logger.warning("Ошибка вызова Gemini API (%s), применяем fallback для пакета.", exc)
-                fallback_results = [
-                    fallback_categorize_item(str(i["item_number"]), str(i.get("raw_description", "")))
-                    for i in batch
-                ]
-                saved = self.db.save_categorized_items(fallback_results, classified_by="fallback")
-                total_saved += saved
+                total_saved += self._save_fallback(batch)
+                continue
+            # Items with a bad id or item_number in the response get the fallback category; they stay
+            # pending, so "Reclassify pending items" sends them to Gemini again
+            answered = {r["item_number"] for r in batch_results}
+            missing = [i for i in batch if str(i["item_number"]) not in answered]
+            if missing:
+                logger.warning("Gemini не вернул ответ для %d товаров пакета, применяем fallback.", len(missing))
+                total_saved += self._save_fallback(missing)
 
         return {"classified_count": total_saved, "provider": "gemini"}
+
+    def _save_fallback(self, items: list[dict[str, Any]]) -> int:
+        """Categorizes items with the local keyword rules and saves them as 'fallback'."""
+        fallback_results = [
+            fallback_categorize_item(str(i["item_number"]), str(i.get("raw_description", ""))) for i in items
+        ]
+        return self.db.save_categorized_items(fallback_results, classified_by="fallback")
 
     def _call_gemini_batch(
         self,
@@ -410,8 +412,10 @@ class GeminiItemClassifier:
 
         model_name = get_gemini_model()
         prompt = _build_classification_prompt(batch, categories, custom_labels_en)
-        batch_schema = _build_batch_schema(categories)
+        batch_schema = _build_batch_schema(tuple(categories))
 
+        logger.debug("Запрос к Gemini (%s), товаров: %d:\n%s", model_name, len(batch), prompt)
+        started = time.monotonic()
         response = client.models.generate_content(
             model=model_name,
             contents=prompt,
@@ -422,6 +426,12 @@ class GeminiItemClassifier:
                 temperature=0.1,
             ),
         )
+        if logger.isEnabledFor(logging.DEBUG):
+            usage = getattr(response, "usage_metadata", None)
+            tokens = f"{usage.prompt_token_count} in / {usage.candidates_token_count} out" if usage else "n/a"
+            logger.debug(
+                "Ответ Gemini за %.1f с, токены: %s:\n%s", time.monotonic() - started, tokens, response.text
+            )
 
         parsed_data = json.loads(response.text)
         batch_inums = {str(i["item_number"]).strip() for i in batch}
@@ -444,13 +454,10 @@ class GeminiItemClassifier:
                 )
                 continue
             raw_desc = str(src.get("raw_description", ""))
-            raw_cat = str(entry.get("category", ""))
-            if raw_cat in categories:
-                cat = raw_cat
-            elif raw_cat.strip() in categories:
-                cat = raw_cat.strip()
-            else:
-                logger.warning("Gemini вернул неизвестную категорию %r для артикула %s", raw_cat, inum)
+            # The response schema limits category to the allowed values; this guards against SDK fallbacks
+            cat = str(entry.get("category", ""))
+            if cat not in categories:
+                logger.warning("Gemini вернул неизвестную категорию %r для артикула %s", cat, inum)
                 cat = "Прочее"
             results_by_id[item_id] = {
                 "item_number": inum,

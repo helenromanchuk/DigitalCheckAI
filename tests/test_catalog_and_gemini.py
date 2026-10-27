@@ -469,8 +469,8 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path):
     assert '"english_label": "Misc"' not in prompt
 
     # Dynamic schema is cached, restricts category to an enum of allowed categories, and keeps its description
-    schema_cls = _build_batch_schema(categories)
-    assert _build_batch_schema(categories) is schema_cls
+    schema_cls = _build_batch_schema(tuple(categories))
+    assert _build_batch_schema(tuple(categories)) is schema_cls
     cat_prop = schema_cls.model_json_schema()["$defs"]["DynamicCategorizedItemSchema"]["properties"]["category"]
     assert cat_prop["enum"] == categories
     assert cat_prop["description"] == CategorizedItemSchema.model_fields["category"].description
@@ -637,21 +637,13 @@ def test_classify_new_items_reuses_client_and_falls_back_on_label_error(tmp_path
     assert db.get_existing_catalog_map(["103"])["103"]["classified_by"] == "fallback"
 
 
-def test_default_category_labels_en_match_frontend_and_config_api(tmp_path: Path):
-    import json
-    import re
-
+def test_config_api_serves_category_labels_and_reserves_default_names(tmp_path: Path):
     from fastapi.testclient import TestClient
 
     from app.api.routes import get_db
-    from app.config import BASE_DIR, DEFAULT_CATEGORIES, DEFAULT_CATEGORY_LABELS_EN
+    from app.config import DEFAULT_CATEGORIES, DEFAULT_CATEGORY_LABELS_EN
     from app.main import app
 
-    i18n_js = (BASE_DIR / "static" / "i18n.js").read_text(encoding="utf-8")
-    match = re.search(r"const\s+CATEGORY_LABELS_EN\s*=\s*(\{.*?\});", i18n_js, flags=re.DOTALL)
-    assert match is not None
-    js_labels = json.loads(match.group(1))
-    assert DEFAULT_CATEGORY_LABELS_EN == js_labels
     assert list(DEFAULT_CATEGORY_LABELS_EN) == DEFAULT_CATEGORIES
 
     test_db = Database(tmp_path / "config_labels.db")
@@ -662,12 +654,98 @@ def test_default_category_labels_en_match_frontend_and_config_api(tmp_path: Path
         assert res.status_code == 200
         assert res.json()["category_labels_en"] == DEFAULT_CATEGORY_LABELS_EN
 
-        # Custom category label is added, while default category label cannot be overwritten
-        client.post("/api/categories", json={"name": "Питомцы", "name_en": "Pets"})
-        res_override = client.post("/api/categories", json={"name": "Прочее", "name_en": "Misc"})
-        assert res_override.status_code == 200
-        labels = res_override.json()["category_labels_en"]
-        assert labels["Питомцы"] == "Pets"
+        res_custom = client.post("/api/categories", json={"name": "Питомцы", "name_en": "Pets"})
+        assert res_custom.status_code == 200
+        assert res_custom.json()["category_labels_en"]["Питомцы"] == "Pets"
+
+        # Default names and their English labels can't be reused: the label would be ignored,
+        # or a custom "Other" would compete with "Прочее" in the Gemini prompt
+        for payload in (
+            {"name": "Прочее", "name_en": "Misc"},
+            {"name": "other"},
+            {"name": "Вино", "name_en": "Alcohol"},
+        ):
+            res = client.post("/api/categories", json=payload)
+            assert res.status_code == 400, payload
+            assert res.json()["detail"]["code"] == "category_reserved"
+        labels = client.get("/api/config").json()["category_labels_en"]
         assert labels["Прочее"] == "Other"
+        assert "Вино" not in labels
     finally:
         app.dependency_overrides.clear()
+
+
+def _fake_gemini_client(answer: dict, usage=None):
+    import json
+    import types as pytypes
+
+    response = pytypes.SimpleNamespace(text=json.dumps(answer, ensure_ascii=False), usage_metadata=usage)
+    return pytypes.SimpleNamespace(models=pytypes.SimpleNamespace(generate_content=lambda **kw: response))
+
+
+def test_gemini_request_and_response_logged_at_debug(tmp_path: Path, caplog):
+    import logging
+    import types as pytypes
+
+    db = Database(tmp_path / "test_costco.db")
+    answer = {"items": [{"id": 0, "item_number": "1234", "clean_name": "Kirkland Olive Oil", "category": "Прочее"}]}
+    usage = pytypes.SimpleNamespace(prompt_token_count=120, candidates_token_count=30)
+    batch = [{"item_number": "1234", "raw_description": "KS ORG EVOO", "sample_unit_price": 9.99}]
+
+    with caplog.at_level(logging.DEBUG, logger="app.categorizer.gemini_classifier"):
+        GeminiItemClassifier(db)._call_gemini_batch(
+            batch, db.get_all_categories(), _fake_gemini_client(answer, usage), {}
+        )
+
+    assert "KS ORG EVOO" in caplog.text
+    assert "Kirkland Olive Oil" in caplog.text
+    assert "120 in / 30 out" in caplog.text
+
+
+def test_items_dropped_from_gemini_response_get_fallback(tmp_path: Path, monkeypatch):
+    db = Database(tmp_path / "test_costco.db")
+    items = [
+        {"item_number": "1001", "raw_description": "KS ORG EVOO", "sample_unit_price": 9.99},
+        {"item_number": "1002", "raw_description": "TIDE PODS 152CT", "sample_unit_price": 29.99},
+    ]
+    # Gemini answers item 0 correctly and returns a wrong item_number for item 1
+    answer = {
+        "items": [
+            {"id": 0, "item_number": "1001", "clean_name": "Kirkland Olive Oil", "category": "Прочее"},
+            {"id": 1, "item_number": "9999", "clean_name": "Wrong Item", "category": "Прочее"},
+        ]
+    }
+    saved: list[tuple[list[str], str]] = []
+    monkeypatch.setattr("app.categorizer.gemini_classifier.get_gemini_api_key", lambda: "test-key-123")
+    monkeypatch.setattr(
+        "app.categorizer.gemini_classifier._make_gemini_client", lambda api_key: _fake_gemini_client(answer)
+    )
+    monkeypatch.setattr(
+        db,
+        "save_categorized_items",
+        lambda results, classified_by="gemini": saved.append(([r["item_number"] for r in results], classified_by))
+        or len(results),
+    )
+
+    result = GeminiItemClassifier(db).classify_new_items(items)
+
+    assert saved == [(["1001"], "gemini"), (["1002"], "fallback")]
+    assert result["classified_count"] == 2
+
+
+def test_gemini_setup_failure_falls_back_once(tmp_path: Path, monkeypatch):
+    db = Database(tmp_path / "test_costco.db")
+    items = [{"item_number": str(1000 + i), "raw_description": "KS ORG EVOO"} for i in range(5)]
+    client_calls: list[str] = []
+
+    def broken_client(api_key):
+        client_calls.append(api_key)
+        raise RuntimeError("bad client")
+
+    monkeypatch.setattr("app.categorizer.gemini_classifier.get_gemini_api_key", lambda: "test-key-123")
+    monkeypatch.setattr("app.categorizer.gemini_classifier._make_gemini_client", broken_client)
+
+    result = GeminiItemClassifier(db, batch_size=2).classify_new_items(items)
+
+    assert client_calls == ["test-key-123"]
+    assert result["provider"] == "fallback"
