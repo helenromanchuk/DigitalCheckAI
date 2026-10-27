@@ -1,5 +1,6 @@
 """Tests for Item # caching in the database, first-time Gemini classification, and manual category changes."""
 from pathlib import Path
+
 from app.categorizer.gemini_classifier import GeminiItemClassifier
 from app.database import ENGLISH_NAMES_SCHEMA_VERSION, Database
 from app.scraper.parser import parse_any_costco_payload
@@ -111,6 +112,7 @@ def test_partial_receipt_does_not_wipe_existing_items(tmp_path: Path):
 def test_gemini_unknown_item_numbers_are_ignored(tmp_path: Path, monkeypatch):
     import json
     import types as pytypes
+
     from google import genai
 
     db = Database(tmp_path / "test_costco.db")
@@ -247,6 +249,7 @@ def test_resync_moves_pending_row_to_parser_category(tmp_path: Path):
 def test_gemini_item_numbers_differing_by_leading_zeros_are_not_matched_loosely(tmp_path: Path, monkeypatch):
     import json
     import types as pytypes
+
     from google import genai
 
     db = Database(tmp_path / "test_costco.db")
@@ -385,7 +388,9 @@ def test_gemini_prompt_includes_store_weight_and_category_rules(tmp_path: Path, 
     import json
     import re
     import types as pytypes
+
     from google import genai
+
     from app.categorizer.gemini_classifier import (
         SYSTEM_INSTRUCTION,
         CategorizedItemSchema,

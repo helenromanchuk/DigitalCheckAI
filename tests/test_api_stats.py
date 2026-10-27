@@ -1,6 +1,7 @@
 """Integration tests for the FastAPI stats endpoints, period filtering, and category changes."""
 import json
 from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from app.api.routes import get_db

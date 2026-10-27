@@ -1,10 +1,11 @@
 """Local SQLite storage for Costco receipts, the item catalog, and analytics."""
 import json
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from app.config import DB_PATH, DEFAULT_CATEGORIES
 from app.unit_price import add_unit_prices
@@ -212,7 +213,7 @@ class Database:
         clean = name.strip()
         if not clean:
             return self.get_all_categories()
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with self.connect() as conn:
             conn.execute(
                 """
@@ -267,7 +268,7 @@ class Database:
         """
         if not items:
             return 0
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         updated = 0
         with self.connect() as conn:
             for item in items:
@@ -331,7 +332,7 @@ class Database:
         Updates the category (and optionally the decoded name) as a manual user edit.
         Sets is_manual_override = 1.
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with self.connect() as conn:
             existing = conn.execute(
                 "SELECT * FROM item_catalog WHERE item_number = ?",
@@ -371,7 +372,7 @@ class Database:
         Saves normalized receipts and their line items to the database.
         Returns receipt counts and the list of brand-new items (not previously in item_catalog).
         """
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         inserted_receipts = 0
         updated_receipts = 0
         skipped_receipts = 0

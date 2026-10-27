@@ -1,0 +1,12 @@
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+
+[tool.ruff.lint]
+ignore = [
+    "BLE001", # broad excepts are deliberate: Gemini fallback, best-effort browser cleanup
+    "S110",   # try/except/pass on context.close() is intentional
+]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.File", "fastapi.Query"]

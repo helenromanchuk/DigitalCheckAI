@@ -3,9 +3,10 @@ import json
 import logging
 import re
 from typing import Any
+
 from pydantic import BaseModel, Field
 
-from app.config import DEFAULT_CATEGORIES, FUEL_CATEGORY, get_gemini_api_key, get_gemini_model
+from app.config import FUEL_CATEGORY, get_gemini_api_key, get_gemini_model
 from app.database import Database
 
 logger = logging.getLogger(__name__)

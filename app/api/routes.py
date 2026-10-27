@@ -1,9 +1,10 @@
 """FastAPI routes for Costco.com sync, categorization, and spending analytics."""
 import asyncio
-from datetime import date, timedelta
 import json
+from datetime import date, timedelta
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from app.categorizer.gemini_classifier import GeminiItemClassifier

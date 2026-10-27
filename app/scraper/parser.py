@@ -62,9 +62,7 @@ def _is_discount_row(raw_item: dict[str, Any]) -> tuple[bool, str | None]:
             return True, match.group(1)
 
     if amount < 0 and (
-        desc1.startswith("/")
-        or desc1.startswith("#")
-        or desc1.startswith("TPD")
+        desc1.startswith(("/", "#", "TPD"))
         or "INSTANT SAVINGS" in desc1
         or "CPN" in desc1
         or "COUPON" in desc1
