@@ -131,6 +131,15 @@ def merge_category_labels_ru(custom_labels_ru: dict[str, str] | None = None) -> 
     return {**(custom_labels_ru or {}), **DEFAULT_CATEGORY_LABELS_RU}
 
 
+def default_category_lookup() -> dict[str, str]:
+    """Maps each default category's casefolded English name and Russian label to its English name."""
+    lookup: dict[str, str] = {}
+    for name, name_ru in DEFAULT_CATEGORY_LABELS_RU.items():
+        lookup[name.casefold()] = name
+        lookup[name_ru.casefold()] = name
+    return lookup
+
+
 _CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
 
 

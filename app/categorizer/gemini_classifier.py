@@ -356,7 +356,12 @@ class GeminiItemClassifier:
             if is_english_category_name(cat):
                 categories.append(cat)
             else:
-                logger.warning("Категория %r не на английском и не отправляется в Gemini; переименуйте её.", cat)
+                logger.warning(
+                    "Категория %r не на английском и не отправляется в Gemini. Чтобы перевести её, добавьте "
+                    "категорию с английским названием и русским названием %r.",
+                    cat,
+                    cat,
+                )
 
         if not api_key or api_key == "your_gemini_api_key_here":
             logger.info("GEMINI_API_KEY не задан — используется локальный резервный классификатор.")

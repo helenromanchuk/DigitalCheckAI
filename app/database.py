@@ -13,7 +13,9 @@ from app.config import (
     DEFAULT_CATEGORIES,
     DEFAULT_CATEGORY_LABELS_RU,
     OTHER_CATEGORY,
+    default_category_lookup,
     is_english_category_name,
+    merge_category_labels_ru,
 )
 from app.errors import AppError
 from app.unit_price import add_unit_prices
@@ -161,16 +163,25 @@ class Database:
     def _swap_custom_category_names(conn: sqlite3.Connection) -> None:
         """
         One-time migration for custom_categories(name, name_en): a row with an English name is renamed
-        to it, and the old (Russian) name moves into name_en, which then becomes name_ru.
-        Rows without an English name keep their name; they are not sent to Gemini.
+        to it, and the old (Russian) name moves into name_en, which then becomes name_ru. When a category
+        with that English name already exists (in any letter case), the row is merged into it and its
+        Russian name becomes that category's label if it has none.
+        Rows without an English name keep their name; add_custom_category can translate them later.
         """
-        rows = conn.execute("SELECT name, name_en FROM custom_categories WHERE name_en != ''").fetchall()
+        rows = conn.execute("SELECT name, name_en FROM custom_categories WHERE TRIM(name_en) != ''").fetchall()
         for row in rows:
             old, new = row["name"], row["name_en"].strip()
             if new == old:
                 continue
-            if conn.execute("SELECT 1 FROM custom_categories WHERE name = ?", (new,)).fetchone():
+            existing = conn.execute(
+                "SELECT name FROM custom_categories WHERE casefold(name) = ? AND name != ?", (new.casefold(), old)
+            ).fetchone()
+            if existing:
+                new = existing["name"]
                 conn.execute("DELETE FROM custom_categories WHERE name = ?", (old,))
+                conn.execute(
+                    "UPDATE custom_categories SET name_en = ? WHERE name = ? AND TRIM(name_en) = ''", (old, new)
+                )
             else:
                 conn.execute("UPDATE custom_categories SET name = ?, name_en = ? WHERE name = ?", (new, old, old))
             conn.execute("UPDATE item_catalog SET category = ? WHERE category = ?", (new, old))
@@ -182,10 +193,7 @@ class Database:
         default name ("Прочее") or saved as a custom name that matches a default ("other") are moved to
         that default, blank ones to "Other", and a Russian label that repeats a default's is cleared.
         """
-        defaults: dict[str, str] = {}
-        for name, name_ru in DEFAULT_CATEGORY_LABELS_RU.items():
-            defaults[name.casefold()] = name
-            defaults[name_ru.casefold()] = name
+        defaults = default_category_lookup()
         custom = [row["name"] for row in conn.execute("SELECT name FROM custom_categories")]
         used = [row["category"] for row in conn.execute("SELECT DISTINCT category FROM item_catalog WHERE category != ''")]
         for name in {*custom, *used}:
@@ -272,10 +280,7 @@ class Database:
         from every casefolded category name and Russian label to the stored category name.
         """
         categories = list(DEFAULT_CATEGORIES)
-        lookup: dict[str, str] = {}
-        for name, name_ru in DEFAULT_CATEGORY_LABELS_RU.items():
-            lookup[name.casefold()] = name
-            lookup[name_ru.casefold()] = name
+        lookup = default_category_lookup()
         for row in conn.execute("SELECT name, name_ru FROM custom_categories ORDER BY name"):
             if row["name"] not in categories:
                 categories.append(row["name"])
@@ -292,7 +297,8 @@ class Database:
         """
         Adds a new user-defined category. The name is English (it is sent to Gemini); name_ru is an optional
         Russian UI label. For an existing category, a non-empty name_ru sets its label, so a category added
-        earlier can get a translation too (the name may differ in letter case).
+        earlier can get a translation too (the name may differ in letter case). When name_ru names a category
+        an old database kept under a Russian name ("Питомцы"), that category is renamed to the English name.
         Raises AppError: "category_empty", "category_not_english", or "category_reserved" when the name or
         label belongs to another category, including the defaults (a custom "other" would compete with "Other").
         """
@@ -309,8 +315,11 @@ class Database:
             clean = owner or clean
             if not is_english_category_name(clean):
                 raise _category_not_english(clean)
+            legacy = None
             if clean_ru and lookup.get(clean_ru.casefold(), clean) != clean:
-                raise _category_reserved(clean_ru)
+                legacy = lookup[clean_ru.casefold()]
+                if legacy in DEFAULT_CATEGORIES or is_english_category_name(legacy):
+                    raise _category_reserved(clean_ru)
             conn.execute(
                 """
                 INSERT INTO custom_categories (name, name_ru, created_at) VALUES (?, ?, ?)
@@ -318,15 +327,19 @@ class Database:
                 """,
                 (clean, clean_ru, now),
             )
+            if legacy:
+                conn.execute("UPDATE item_catalog SET category = ? WHERE category = ?", (clean, legacy))
+                conn.execute("DELETE FROM custom_categories WHERE name = ?", (legacy,))
+                categories.remove(legacy)
         if clean not in categories:
             categories.append(clean)
         return categories
 
     def get_category_labels_ru(self) -> dict[str, str]:
-        """Russian UI labels of user-defined categories that have one."""
+        """Russian UI labels of every category that has one: the defaults and labelled custom categories."""
         with self.connect() as conn:
             rows = conn.execute("SELECT name, name_ru FROM custom_categories WHERE name_ru != ''").fetchall()
-        return {row["name"]: row["name_ru"] for row in rows}
+        return merge_category_labels_ru({row["name"]: row["name_ru"] for row in rows})
 
     def get_existing_catalog_map(self, item_numbers: list[str]) -> dict[str, dict[str, Any]]:
         """Returns existing item_catalog rows for the given item numbers."""
@@ -444,9 +457,12 @@ class Database:
             new_category = category.strip()
             if not new_category:
                 raise _category_empty()
-            new_category = self._read_categories(conn)[1].get(new_category.casefold(), new_category)
-            if not is_english_category_name(new_category):
+            # An existing category is accepted as is, even one an old database kept under a Russian name;
+            # a new one must be English
+            known = self._read_categories(conn)[1].get(new_category.casefold())
+            if known is None and not is_english_category_name(new_category):
                 raise _category_not_english(new_category)
+            new_category = known or new_category
 
             conn.execute(
                 """

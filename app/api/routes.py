@@ -11,7 +11,6 @@ from app.categorizer.gemini_classifier import GeminiItemClassifier
 from app.config import (
     get_gemini_api_key,
     get_gemini_model,
-    merge_category_labels_ru,
     save_gemini_api_key,
 )
 from app.database import Database
@@ -74,7 +73,7 @@ def get_app_config(db: Database = Depends(get_db)) -> dict[str, Any]:
         "has_gemini_key": has_key,
         "gemini_model": get_gemini_model(),
         "categories": db.get_all_categories(),
-        "category_labels_ru": merge_category_labels_ru(db.get_category_labels_ru()),
+        "category_labels_ru": db.get_category_labels_ru(),
         "pending_gemini_items_count": len(pending),
     }
 
@@ -108,7 +107,7 @@ def create_custom_category(
         raise HTTPException(status_code=400, detail=exc.to_detail()) from exc
     return {
         "categories": categories,
-        "category_labels_ru": merge_category_labels_ru(db.get_category_labels_ru()),
+        "category_labels_ru": db.get_category_labels_ru(),
     }
 
 

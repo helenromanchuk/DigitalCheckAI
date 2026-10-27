@@ -383,13 +383,15 @@ def test_migration_translates_generated_names_to_english(tmp_path: Path):
 
 def test_custom_category_russian_label_can_be_added_later(tmp_path: Path):
     db = Database(tmp_path / "test_costco.db")
+    from app.config import DEFAULT_CATEGORY_LABELS_RU
+
     db.add_custom_category("Pets")
-    assert db.get_category_labels_ru() == {}
+    assert db.get_category_labels_ru() == DEFAULT_CATEGORY_LABELS_RU
 
     db.add_custom_category("Pets", "Питомцы")
     db.add_custom_category("Pets")  # an empty Russian label keeps the existing one
 
-    assert db.get_category_labels_ru() == {"Pets": "Питомцы"}
+    assert db.get_category_labels_ru() == {**DEFAULT_CATEGORY_LABELS_RU, "Pets": "Питомцы"}
     assert db.get_all_categories().count("Pets") == 1
 
 
@@ -795,6 +797,8 @@ def _legacy_russian_db(db_path: Path) -> None:
 
 
 def test_startup_migrates_russian_categories_to_english(tmp_path: Path):
+    from app.config import DEFAULT_CATEGORIES
+
     db_path = tmp_path / "test_costco.db"
     _legacy_russian_db(db_path)
 
@@ -815,7 +819,9 @@ def test_startup_migrates_russian_categories_to_english(tmp_path: Path):
     categories = db.get_all_categories()
     assert "Kids" in categories and "Подарки" in categories
     assert not {"Детские товары", "прочее", "Вино", "Прочее", " "} & set(categories)
-    assert db.get_category_labels_ru() == {"Kids": "Детские товары"}
+    assert {k: v for k, v in db.get_category_labels_ru().items() if k not in DEFAULT_CATEGORIES} == {
+        "Kids": "Детские товары"
+    }
 
 
 def test_blank_category_names_are_rejected(tmp_path: Path):
@@ -908,3 +914,50 @@ def test_duplicate_id_warning_skips_rejected_answers(tmp_path: Path, caplog):
     results = GeminiItemClassifier(db)._call_gemini_batch(batch, db.get_all_categories(), _fake_gemini_client(answer))
     assert [r["clean_name"] for r in results] == ["Right"]
     assert "повторный" not in caplog.text
+
+
+def test_legacy_russian_category_can_be_used_and_translated(tmp_path: Path):
+    db = Database(tmp_path / "test_costco.db")
+    with db.connect() as conn:
+        conn.execute("INSERT INTO custom_categories (name, name_ru, created_at) VALUES ('Питомцы', '', '2026-10-01')")
+        conn.execute(
+            """
+            INSERT INTO item_catalog (item_number, raw_description, clean_name, category, is_manual_override, classified_by, updated_at)
+            VALUES ('5555', 'DOG FOOD', 'Dog Food', 'Питомцы', 1, 'manual', '2026-10-01')
+            """
+        )
+
+    # The UI sends the item's current category with a rename; an existing Russian category is accepted
+    assert db.update_item_category_manual("5555", "Питомцы", "Dog Food 20 lb")["clean_name"] == "Dog Food 20 lb"
+
+    # Adding the English name with the old Russian one as its label renames the category and its items
+    categories = db.add_custom_category("Pets", "Питомцы")
+    assert "Pets" in categories and "Питомцы" not in categories
+    assert db.get_existing_catalog_map(["5555"])["5555"]["category"] == "Pets"
+    assert db.get_category_labels_ru()["Pets"] == "Питомцы"
+    assert "Питомцы" not in db.get_all_categories()
+
+
+def test_swap_migration_merges_case_insensitively_and_keeps_labels(tmp_path: Path):
+    import sqlite3
+
+    db_path = tmp_path / "test_costco.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE custom_categories (name TEXT PRIMARY KEY, created_at TEXT NOT NULL, name_en TEXT NOT NULL DEFAULT '');
+        INSERT INTO custom_categories VALUES
+            ('pets', '2026-10-01', ''), ('Питомцы', '2026-10-01', 'Pets'), ('Игрушки', '2026-10-01', '   ');
+        PRAGMA user_version = 2;
+        """
+    )
+    conn.close()
+
+    db = Database(db_path)
+
+    categories = db.get_all_categories()
+    assert "pets" in categories and "Pets" not in categories and "Питомцы" not in categories
+    # A whitespace-only English name is ignored: the category keeps its name
+    assert "Игрушки" in categories
+    assert db.get_category_labels_ru()["pets"] == "Питомцы"
+

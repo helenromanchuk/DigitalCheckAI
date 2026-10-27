@@ -675,7 +675,10 @@ async function updateItemCategory(itemNumber, category, newCleanName) {
     showBanner(t("banner.itemSaved", { item: itemNumber }), "success");
     await Promise.all([loadStats(), loadMembershipAnalytics(), loadItemsTable(), loadReceiptsList()]);
   } else {
-    showBanner(t("banner.itemFailed", { item: itemNumber }), "error");
+    const body = await res.json().catch(() => ({}));
+    const detail = body.detail;
+    const hasCode = detail && typeof detail === "object" && !Array.isArray(detail) && detail.code;
+    showBanner(hasCode ? apiErrorText(detail, "banner.itemFailed") : t("banner.itemFailed", { item: itemNumber }), "error");
   }
 }
 
