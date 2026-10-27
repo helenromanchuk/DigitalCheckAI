@@ -2,12 +2,20 @@
 import json
 import logging
 import re
+from collections import Counter
 from enum import Enum
+from functools import lru_cache
 from typing import Any
 
 from pydantic import BaseModel, Field, create_model
 
-from app.config import DEFAULT_CATEGORY_LABELS_EN, FUEL_CATEGORY, get_gemini_api_key, get_gemini_model
+from app.config import (
+    DEFAULT_CATEGORY_LABELS_EN,
+    DEFAULT_CATEGORY_SCOPES,
+    FUEL_CATEGORY,
+    get_gemini_api_key,
+    get_gemini_model,
+)
 from app.database import Database
 
 logger = logging.getLogger(__name__)
@@ -39,73 +47,8 @@ class CategorizedBatchSchema(BaseModel):
     items: list[CategorizedItemSchema]
 
 
-# Scope description for each default category, keyed by its canonical DB name from app.config
-_DEFAULT_CATEGORY_SCOPES: dict[str, str] = {
-    "Мясо, птица и морепродукты": (
-        "fresh/chilled raw meat, poultry, fish, seafood, bacon, sausages & links "
-        "(Aidells, Kiolbassa, linguica, franks), salami, prosciutto, charcuterie, and packaged sliced deli meats "
-        "(sliced turkey, ham, roast beef)."
-    ),
-    "Овощи, фрукты и ягоды": (
-        "fresh produce, fruits, berries, vegetables, fresh herbs, salad mixes & kits, kimchi, living potted herbs."
-    ),
-    "Молочные продукты, сыр и яйца": (
-        "milk, cream, butter, sour cream, yogurt, cultured/probiotic dairy drinks (Cool Plus, kefir), "
-        "all cheeses, eggs."
-    ),
-    "Выпечка, хлеб и готовая еда (Deli)": (
-        "bread, buns, baguettes, croissants, tortillas, naan, pita, cakes, pastries, crepes/pancakes, "
-        "and fresh prepared Costco Service Deli / ready-to-eat chilled meals (rotisserie chicken, sushi, poke, "
-        "refrigerated ravioli/pasta, prepared entrées in sauce)."
-    ),
-    "Бакалея, масла, специи и консервы": (
-        "olive & cooking oils, vinegar, grains, rice, oats/granola/cereal, flour, sugar, yeast, dry pasta & "
-        "instant noodle bowls, sauces, mayonnaise, marinades, spices/seasonings/rubs, honey, jams/fruit spreads, "
-        "olives, sauerkraut, canned goods."
-    ),
-    "Заморозка и полуфабрикаты": (
-        "frozen foods — dumplings/potstickers/mandu, frozen burgers/patties, frozen meatballs, frozen snacks/"
-        "appetizers (flautas, spanakopita, takoyaki, pizza), frozen breaded or portioned fish/seafood "
-        "(frozen Mahi-Mahi, frozen seafood mix, tortilla-crusted tilapia), frozen vegetables/berries/fruit, ice cream."
-    ),
-    "Снеки, сладости, орехи и напитки": (
-        "chocolate, candy, cookies, crackers, chips, nuts, trail mix, dried & freeze-dried fruit, "
-        "protein/granola bars, non-alcoholic beverages (water, juice, soda, kombucha, energy drinks), "
-        "and coffee (whole bean, ground, K-Cup pods) & tea."
-    ),
-    "Бытовая химия, бумага и уборка": (
-        "laundry detergent, dish soap/pods, surface/oven/shoe cleaners, bath tissue/toilet paper, paper towels, "
-        "facial tissues, trash bags, disposable food storage bags (Ziploc), foil, parchment."
-    ),
-    "Здоровье, аптека, витамины и гигиена": (
-        "vitamins, supplements, OTC medications, toothpaste, mouthwash, dental floss, razors/cartridges, deodorant, "
-        "feminine care (pads, liners), shampoo, conditioner, body wash, skincare/creams/lotions, toner pads, "
-        "sunscreen, cosmetics, massagers."
-    ),
-    "Товары для дома, кухни и сада": (
-        "cookware, reusable food storage containers & lunch boxes (Pyrex, Bentgo), cabinet/cosmetic organizers, "
-        "storage drawers, hangers, home textiles, gift wrap & ribbon, garden planters & decorative floral "
-        "arrangements, folding carts/hand trucks, multi-tools & hardware."
-    ),
-    "Одежда и обувь": (
-        "men's, women's, and kids' apparel, underwear, socks, swimwear, shoes, gloves, hats/beanies, "
-        "sunglasses/eyewear, bags & backpacks."
-    ),
-    "Электроника и техника": (
-        "electronics, headphones, appliances, portable fans, chargers, cables, and batteries "
-        "(Duracell AA/AAA, rechargeable)."
-    ),
-    FUEL_CATEGORY: "gasoline, diesel, motor oil, automotive supplies.",
-    "Алкоголь": "wine, prosecco, champagne, beer, spirits, sangria.",
-    "Прочее": (
-        "bottle deposits (`CA REDEMP VAL` / CRV), liquor liter taxes (`LIQUOR LITER TAX`), standalone store coupons/"
-        "adjustments (`CPN`, `/123456`), gift cards, and items (such as toys/`LEGO` when no kids/toys category is "
-        "in `Allowed categories`) that do not fit any other allowed category."
-    ),
-}
-
 _CATEGORY_RULES_TEXT = "\n".join(
-    f"- **{en_label}**: {_DEFAULT_CATEGORY_SCOPES[cat_key]}"
+    f"- **{en_label}**: {DEFAULT_CATEGORY_SCOPES.get(cat_key, '')}"
     for cat_key, en_label in DEFAULT_CATEGORY_LABELS_EN.items()
 )
 
@@ -152,9 +95,9 @@ SYSTEM_INSTRUCTION = (
     "### 2. Rules for Selecting `category`\n"
     "- Return the exact `category` value from `Allowed categories` in the user prompt.\n"
     "- **Custom user-defined categories take priority**: If `Allowed categories` includes custom categories beyond "
-    "the 15 defaults (e.g., `Kids`, `Toys`, `Pets`, `Baby`), always prefer a matching custom category over broad "
-    "defaults or `Other` (for example, `LEGO` or dolls go to a kids/toys category if present, and pet items go to a "
-    "pets category if present).\n"
+    f"the {len(DEFAULT_CATEGORY_LABELS_EN)} defaults (e.g., `Kids`, `Toys`, `Pets`, `Baby`), always prefer a "
+    "matching custom category over broad defaults or `Other` (for example, `LEGO` or dolls go to a kids/toys "
+    "category if present, and pet items go to a pets category if present).\n"
     "- Default category boundaries (shown by their `english_label`):\n"
     f"{_CATEGORY_RULES_TEXT}\n\n"
     "### 3. Output Completeness Requirements\n"
@@ -164,18 +107,15 @@ SYSTEM_INSTRUCTION = (
 )
 
 
-def _build_batch_schema(categories: list[str]) -> type[BaseModel]:
-    """Builds a batch response schema whose category field is an enum of the allowed categories."""
+@lru_cache(maxsize=16)
+def _build_batch_schema_cached(categories: tuple[str, ...]) -> type[BaseModel]:
     if not categories:
         return CategorizedBatchSchema
     category_enum = Enum("CategoryEnum", {f"CAT_{i}": c for i, c in enumerate(categories)}, type=str)
     item_model = create_model(
         "DynamicCategorizedItemSchema",
         __base__=CategorizedItemSchema,
-        category=(
-            category_enum,
-            Field(description="Exact category value from the provided Allowed categories list"),
-        ),
+        category=(category_enum, ...),
     )
     return create_model(
         "DynamicCategorizedBatchSchema",
@@ -184,13 +124,19 @@ def _build_batch_schema(categories: list[str]) -> type[BaseModel]:
     )
 
 
+def _build_batch_schema(categories: list[str] | tuple[str, ...]) -> type[BaseModel]:
+    """Builds (or returns cached) a batch response schema whose category field is an enum of allowed categories."""
+    return _build_batch_schema_cached(tuple(categories))
+
+
 def _build_classification_prompt(
     items_payload: list[dict[str, Any]],
     categories: list[str],
     category_labels_en: dict[str, str] | None = None,
 ) -> str:
     """Builds the per-batch user prompt with the allowed categories and items to classify."""
-    labels_en = {**DEFAULT_CATEGORY_LABELS_EN, **(category_labels_en or {})}
+    # Default labels take precedence over custom labels, matching static/i18n.js categoryLabel()
+    labels_en = {**(category_labels_en or {}), **DEFAULT_CATEGORY_LABELS_EN}
     allowed_entries: list[str | dict[str, str]] = [
         {"category": c, "english_label": labels_en[c]} if c in labels_en and labels_en[c] != c else c
         for c in categories
@@ -358,13 +304,28 @@ def fallback_categorize_item(item_number: str, raw_description: str) -> dict[str
     return result
 
 
-def _loose_item_key(item_number: str) -> str:
+_SWY_PREFIX_RE = re.compile(r"^SWY(?=[-\s_\d])[-\s_]*", re.IGNORECASE)
+
+
+def _has_swy_prefix(item_number: str) -> bool:
+    return bool(_SWY_PREFIX_RE.match(item_number.strip()))
+
+
+def _core_item_key(item_number: str) -> str:
     """Item number without spaces, 'SWY-' prefix, and leading zeros; '000' stays '0', empty stays empty."""
     trimmed = item_number.strip()
-    without_prefix = re.sub(r"^SWY(?=[-\s_\d])[-\s_]*", "", trimmed, flags=re.IGNORECASE).strip()
+    without_prefix = _SWY_PREFIX_RE.sub("", trimmed).strip()
     if without_prefix:
         trimmed = without_prefix
     return trimmed.lstrip("0") or ("0" if trimmed else "")
+
+
+def _loose_item_key(item_number: str) -> str:
+    """Normalized item key keeping Safeway ('SWY-...') and Costco items in separate namespaces."""
+    core = _core_item_key(item_number)
+    if not core:
+        return ""
+    return f"SWY-{core}" if _has_swy_prefix(item_number) else core
 
 
 class GeminiItemClassifier:
@@ -377,6 +338,7 @@ class GeminiItemClassifier:
     def __init__(self, db: Database, batch_size: int = 40) -> None:
         self.db = db
         self.batch_size = batch_size
+        self._cached_custom_labels_en: dict[str, str] | None = None
 
     def classify_new_items(self, items: list[dict[str, Any]]) -> dict[str, Any]:
         """
@@ -398,21 +360,27 @@ class GeminiItemClassifier:
             saved = self.db.save_categorized_items(fallback_results, classified_by="fallback")
             return {"classified_count": saved, "provider": "fallback"}
 
+        # Query custom category English labels and build the dynamic Enum schema once across all batches
+        self._cached_custom_labels_en = self.db.get_category_labels_en()
+        _build_batch_schema(categories)
         total_saved = 0
-        for start in range(0, len(items), self.batch_size):
-            batch = items[start : start + self.batch_size]
-            try:
-                batch_results = self._call_gemini_batch(batch, categories, api_key)
-                saved = self.db.save_categorized_items(batch_results, classified_by="gemini")
-                total_saved += saved
-            except Exception as exc:
-                logger.warning("Ошибка вызова Gemini API (%s), применяем fallback для пакета.", exc)
-                fallback_results = [
-                    fallback_categorize_item(str(i["item_number"]), str(i.get("raw_description", "")))
-                    for i in batch
-                ]
-                saved = self.db.save_categorized_items(fallback_results, classified_by="fallback")
-                total_saved += saved
+        try:
+            for start in range(0, len(items), self.batch_size):
+                batch = items[start : start + self.batch_size]
+                try:
+                    batch_results = self._call_gemini_batch(batch, categories, api_key)
+                    saved = self.db.save_categorized_items(batch_results, classified_by="gemini")
+                    total_saved += saved
+                except Exception as exc:
+                    logger.warning("Ошибка вызова Gemini API (%s), применяем fallback для пакета.", exc)
+                    fallback_results = [
+                        fallback_categorize_item(str(i["item_number"]), str(i.get("raw_description", "")))
+                        for i in batch
+                    ]
+                    saved = self.db.save_categorized_items(fallback_results, classified_by="fallback")
+                    total_saved += saved
+        finally:
+            self._cached_custom_labels_en = None
 
         return {"classified_count": total_saved, "provider": "gemini"}
 
@@ -442,7 +410,11 @@ class GeminiItemClassifier:
             for i in batch
         ]
 
-        custom_labels_en = self.db.get_category_labels_en()
+        custom_labels_en = (
+            self._cached_custom_labels_en
+            if self._cached_custom_labels_en is not None
+            else self.db.get_category_labels_en()
+        )
         prompt = _build_classification_prompt(items_payload, categories, custom_labels_en)
         batch_schema = _build_batch_schema(categories)
 
@@ -459,36 +431,51 @@ class GeminiItemClassifier:
 
         parsed_data = json.loads(response.text)
         raw_map = {str(i["item_number"]): str(i.get("raw_description", "")) for i in batch}
-        # Gemini may return an item number with leading zeros, spaces, or without the 'SWY-' prefix;
-        # map it back to the original. Only unambiguous keys: if "0123" and "123" are both in the batch,
-        # neither is matched loosely
+        # Keep Costco ('1234') and Safeway ('SWY-1234') in separate loose_candidates keys so they don't
+        # mark each other as ambiguous. If Gemini drops 'SWY-' on a Safeway item, only match it to
+        # 'SWY-<core>' when no Costco item with '<core>' is in the batch; and if both '<core>' and
+        # 'SWY-<core>' are in the batch while 'SWY-<core>' is missing from the response, reject bare
+        # '<core>' so a dropped prefix on the Safeway item can never overwrite the Costco item.
         loose_candidates: dict[str, list[str]] = {}
         for k in raw_map:
             loose_candidates.setdefault(_loose_item_key(k), []).append(k)
         loose_map = {key: keys[0] for key, keys in loose_candidates.items() if key and len(keys) == 1}
 
-        # Map both canonical category names and their English labels back to the canonical DB category
-        labels_en = {**DEFAULT_CATEGORY_LABELS_EN, **custom_labels_en}
-        category_lookup: dict[str, str] = {}
-        for c in categories:
-            if c in labels_en and labels_en[c]:
-                category_lookup[labels_en[c].casefold()] = c
-            category_lookup[c.casefold()] = c
+        entries = parsed_data.get("items", [])
+        returned_loose_keys = {_loose_item_key(str(e.get("item_number", ""))) for e in entries}
 
-        results: list[dict[str, str]] = []
-
-        for entry in parsed_data.get("items", []):
+        resolved_entries: list[tuple[str, dict[str, Any]]] = []
+        for entry in entries:
             returned = str(entry.get("item_number", "")).strip()
-            inum = returned if returned in raw_map else loose_map.get(_loose_item_key(returned))
+            lkey = _loose_item_key(returned)
+            core = _core_item_key(returned)
+            swy_key = f"SWY-{core}" if core else ""
+
+            if not _has_swy_prefix(returned) and swy_key in loose_candidates:
+                if core not in loose_candidates:
+                    inum = loose_map.get(swy_key)
+                elif swy_key not in returned_loose_keys:
+                    inum = None
+                else:
+                    inum = returned if returned in raw_map else loose_map.get(lkey)
+            else:
+                inum = returned if returned in raw_map else loose_map.get(lkey)
+
             if not inum:
-                # An unknown or made-up item number must not create or overwrite catalog rows;
-                # the batch item stays pending and goes into the next classification run
                 logger.warning("Gemini вернул артикул не из пакета: %r", returned)
                 continue
-            raw_cat = str(entry.get("category", "")).strip()
-            cat = raw_cat if raw_cat in categories else category_lookup.get(raw_cat.casefold())
-            if not cat:
-                logger.warning("Gemini вернул неизвестную категорию %r для артикула %s", raw_cat, inum)
+            resolved_entries.append((inum, entry))
+
+        inum_counts = Counter(inum for inum, _ in resolved_entries)
+        results: list[dict[str, str]] = []
+
+        for inum, entry in resolved_entries:
+            if inum_counts[inum] > 1:
+                logger.warning("Gemini вернул дублирующийся артикул в пакете: %r", inum)
+                continue
+            cat = str(entry.get("category", "")).strip()
+            if cat not in categories:
+                logger.warning("Gemini вернул неизвестную категорию %r для артикула %s", cat, inum)
                 cat = "Прочее"
             results.append(
                 {

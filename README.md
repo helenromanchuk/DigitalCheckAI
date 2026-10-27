@@ -67,7 +67,7 @@ flowchart LR
 
 ## Quick start (Windows)
 
-Double-click **`run.bat`** or run in a terminal:
+Requires **Python 3.11+**. Double-click **`run.bat`** or run in a terminal:
 
 ```powershell
 python -m venv .venv

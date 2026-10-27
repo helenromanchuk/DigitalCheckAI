@@ -384,7 +384,7 @@ def test_custom_category_english_name_can_be_added_later(tmp_path: Path):
     assert db.get_all_categories().count("Питомцы") == 1
 
 
-def test_gemini_prompt_schema_and_english_or_prefix_handling(tmp_path: Path, monkeypatch):
+def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path, monkeypatch):
     import json
     import re
     import types as pytypes
@@ -400,6 +400,8 @@ def test_gemini_prompt_schema_and_english_or_prefix_handling(tmp_path: Path, mon
 
     db = Database(tmp_path / "test_costco.db")
     db.add_custom_category("Питомцы", "Pets")
+    # Setting an English label on a default category must not override the default label in the prompt
+    db.add_custom_category("Прочее", "Misc")
     captured: dict = {}
 
     class FakeClient:
@@ -411,16 +413,15 @@ def test_gemini_prompt_schema_and_english_or_prefix_handling(tmp_path: Path, mon
                         {
                             "items": [
                                 {
-                                    # Dropped SWY- prefix and returned English default category heading
+                                    # Dropped SWY- prefix when no Costco item with 7989311562 is in the batch
                                     "item_number": "7989311562",
                                     "clean_name": "O Organics Broth (32 fl oz)",
-                                    "category": "Pantry, oils, spices & canned goods",
+                                    "category": "Бакалея, масла, специи и консервы",
                                 },
                                 {
                                     "item_number": "9001",
                                     "clean_name": "Kirkland Dog Treats (5 lb)",
-                                    # Returned custom category's English name
-                                    "category": "Pets",
+                                    "category": "Питомцы",
                                 },
                                 {
                                     "item_number": "9002",
@@ -443,22 +444,25 @@ def test_gemini_prompt_schema_and_english_or_prefix_handling(tmp_path: Path, mon
         {"item_number": "9002", "raw_description": "MYSTERY", "sample_unit_price": 1.00},
     ]
 
-    # Static rules live in SYSTEM_INSTRUCTION (English-only); per-batch prompt holds only categories and items
+    # Static rules live in SYSTEM_INSTRUCTION (English-only)
     assert "Safeway" in SYSTEM_INSTRUCTION and "SWY-" in SYSTEM_INSTRUCTION
     assert "fl oz" in SYSTEM_INSTRUCTION
     assert "Master Case" in SYSTEM_INSTRUCTION
     assert "Custom user-defined categories take priority" in SYSTEM_INSTRUCTION
     assert not re.search(r"[А-Яа-яЁё]", SYSTEM_INSTRUCTION)
     assert not re.search(r"[А-Яа-яЁё]", json.dumps(CategorizedItemSchema.model_json_schema(), ensure_ascii=False))
-    assert not re.search(r"[А-Яа-яЁё]", _build_classification_prompt(batch, ["Pantry"]))
 
     prompt = _build_classification_prompt(batch, categories, db.get_category_labels_en())
     for cat in categories:
         assert cat in prompt
     assert '"english_label": "Pets"' in prompt
+    assert '"english_label": "Other"' in prompt
+    assert '"english_label": "Misc"' not in prompt
 
-    # Dynamic schema restricts category to an enum of the allowed categories
-    schema_json = _build_batch_schema(categories).model_json_schema()
+    # Dynamic schema is cached and restricts category to an enum of the allowed categories
+    schema_cls = _build_batch_schema(categories)
+    assert _build_batch_schema(categories) is schema_cls
+    schema_json = schema_cls.model_json_schema()
     assert categories in [
         defn.get("enum") for defn in schema_json.get("$defs", {}).values() if "enum" in defn
     ]
@@ -486,6 +490,61 @@ def test_gemini_prompt_schema_and_english_or_prefix_handling(tmp_path: Path, mon
             "category": "Прочее",
         },
     ]
+
+
+def test_safeway_and_costco_same_digits_never_overwrite_each_other(tmp_path: Path, monkeypatch):
+    import json
+    import types as pytypes
+
+    from google import genai
+
+    db = Database(tmp_path / "test_costco.db")
+    categories = db.get_all_categories()
+    batch = [
+        {"item_number": "1234", "raw_description": "KS OLIVE OIL"},
+        {"item_number": "SWY-1234", "raw_description": "O ORGNC MILK"},
+    ]
+
+    # 1. When Gemini keeps the SWY- prefix (even with leading zeros / lowercase), both match cleanly
+    answer_both = {
+        "items": [
+            {"item_number": "01234", "clean_name": "Kirkland Olive Oil", "category": "Бакалея, масла, специи и консервы"},
+            {"item_number": "swy-01234", "clean_name": "O Organics Milk", "category": "Молочные продукты, сыр и яйца"},
+        ]
+    }
+    monkeypatch.setattr(
+        genai,
+        "Client",
+        lambda **kw: pytypes.SimpleNamespace(
+            models=pytypes.SimpleNamespace(
+                generate_content=lambda **gkw: pytypes.SimpleNamespace(text=json.dumps(answer_both, ensure_ascii=False))
+            )
+        ),
+    )
+    res_both = GeminiItemClassifier(db)._call_gemini_batch(batch, categories, "key")
+    assert [(r["item_number"], r["clean_name"]) for r in res_both] == [
+        ("1234", "Kirkland Olive Oil"),
+        ("SWY-1234", "O Organics Milk"),
+    ]
+
+    # 2. If Gemini drops the SWY- prefix when both 1234 and SWY-1234 are in the batch, neither overwrites 1234
+    answer_dropped = {
+        "items": [
+            {"item_number": "1234", "clean_name": "O Organics Milk", "category": "Молочные продукты, сыр и яйца"},
+        ]
+    }
+    monkeypatch.setattr(
+        genai,
+        "Client",
+        lambda **kw: pytypes.SimpleNamespace(
+            models=pytypes.SimpleNamespace(
+                generate_content=lambda **gkw: pytypes.SimpleNamespace(
+                    text=json.dumps(answer_dropped, ensure_ascii=False)
+                )
+            )
+        ),
+    )
+    assert GeminiItemClassifier(db)._call_gemini_batch(batch, categories, "key") == []
 
 
 def test_default_category_labels_en_match_frontend_i18n():
