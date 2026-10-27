@@ -3,11 +3,13 @@ import re
 from typing import Any
 
 from app.config import FUEL_CATEGORY, OTHER_CATEGORY
+from app.receipt_tax import is_crv_line
 
 # Names for items the parser categorizes itself. Product names are stored in English, like the names
 # Gemini decodes, so the catalog has one language whatever the UI language is
 FUEL_NAME_PREFIX = "Costco Fuel ("
 COUPON_NAME_PREFIX = "Coupon ("
+CRV_NAME = "California Redemption Value (CRV)"
 
 
 # A coupon's reference to its item on a Costco receipt: "TPD/1234567", "/1234567", "/ 1234567" or "#1234567".
@@ -206,6 +208,11 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
         }
         if is_explicit_fuel:
             _mark_fuel(item_entry)
+        elif is_crv_line(full_raw_desc):
+            # A bottle deposit takes the category of the item it is charged for, so it needs no classifying
+            item_entry["default_category"] = OTHER_CATEGORY
+            item_entry["default_clean_name"] = CRV_NAME
+            non_fuel_lines += 1
         elif is_keyword_fuel:
             keyword_fuel_items.append((item_entry, amount, unit_price))
         else:

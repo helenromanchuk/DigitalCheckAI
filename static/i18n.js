@@ -42,6 +42,10 @@ const I18N = {
     "col.decodedShort": "Расшифровка",
     "col.discount": "Скидка",
     "col.netAmount": "Чистая сумма",
+    "col.taxCrvTitle": "Налог чека, разнесённый по облагаемым товарам, плюс залог за тару (CRV)",
+    "col.taxCrv": "Налог/CRV",
+    "col.total": "Итого",
+    "col.totalTitle": "Чистая сумма плюс налог и CRV",
     "col.categoryEditable": "Категория (можно изменить)",
     "col.source": "Источник",
 
@@ -136,6 +140,8 @@ const I18N = {
     "receipts.notFound": "Чеки за выбранный период не найдены.",
     "receipts.discount": "Скидка: -{amount}",
     "receipts.tax": "Налог: {amount}",
+    "receipts.itemTax": "налог {amount}",
+    "receipts.itemCrv": "залог CRV {amount}",
 
     "banner.itemSaved": "Категория для Item #{item} сохранена в локальной базе и пересчитана во всех чеках.",
     "banner.itemFailed": "Не удалось обновить Item #{item}",
@@ -248,6 +254,10 @@ const I18N = {
     "col.decodedShort": "Decoded name",
     "col.discount": "Discount",
     "col.netAmount": "Net amount",
+    "col.taxCrvTitle": "Receipt tax split across taxable items, plus the container deposit (CRV)",
+    "col.taxCrv": "Tax/CRV",
+    "col.total": "Total",
+    "col.totalTitle": "Net amount plus tax and CRV",
     "col.categoryEditable": "Category (editable)",
     "col.source": "Source",
 
@@ -342,6 +352,8 @@ const I18N = {
     "receipts.notFound": "No receipts for the selected period.",
     "receipts.discount": "Discount: -{amount}",
     "receipts.tax": "Tax: {amount}",
+    "receipts.itemTax": "tax {amount}",
+    "receipts.itemCrv": "CRV {amount}",
 
     "banner.itemSaved": "Category for Item #{item} saved to the local database and updated on all receipts.",
     "banner.itemFailed": "Couldn't update Item #{item}",

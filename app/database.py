@@ -4,6 +4,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from itertools import groupby
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from app.config import (
     merge_category_labels_ru,
 )
 from app.errors import AppError
+from app.receipt_tax import add_tax_and_crv, crv_owners
 from app.unit_price import add_unit_prices
 
 # PRAGMA user_version after each one-time data migration (see init_db)
@@ -143,6 +145,13 @@ class Database:
             item_columns = {row["name"] for row in conn.execute("PRAGMA table_info(receipt_items)")}
             if "is_weight" not in item_columns:
                 conn.execute("ALTER TABLE receipt_items ADD COLUMN is_weight INTEGER NOT NULL DEFAULT 0")
+            # Migration: a CRV line ("CA REDEMP VAL T EI/919140") counts towards the item it was charged for
+            # (crv_for_item is the owner's item number for SQL joins, crv_owner_id the owner's receipt_items id)
+            if "crv_for_item" not in item_columns:
+                conn.execute("ALTER TABLE receipt_items ADD COLUMN crv_for_item TEXT")
+            if "crv_owner_id" not in item_columns:
+                conn.execute("ALTER TABLE receipt_items ADD COLUMN crv_owner_id INTEGER")
+                self._link_crv_lines(conn)
             self._merge_categories_clashing_with_defaults(conn)
             schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
 
@@ -158,6 +167,27 @@ class Database:
             self._translate_generated_names()
             with self.connect() as conn:
                 conn.execute(f"PRAGMA user_version = {ENGLISH_NAMES_SCHEMA_VERSION}")
+
+    @classmethod
+    def _link_crv_lines(cls, conn: sqlite3.Connection) -> None:
+        """Links the CRV lines of every stored receipt to the lines they belong to (a one-time migration)."""
+        rows = conn.execute(
+            "SELECT id, transaction_barcode, item_number, raw_description FROM receipt_items "
+            "ORDER BY transaction_barcode, id"
+        ).fetchall()
+        for _, group in groupby(rows, key=lambda row: row["transaction_barcode"]):
+            cls._save_crv_links(conn, [dict(row) for row in group])
+
+    @staticmethod
+    def _save_crv_links(conn: sqlite3.Connection, lines: list[dict[str, Any]]) -> None:
+        """Stores the owner of each CRV line among one receipt's lines (each with its receipt_items id)."""
+        conn.executemany(
+            "UPDATE receipt_items SET crv_for_item = ?, crv_owner_id = ? WHERE id = ?",
+            [
+                (lines[owner]["item_number"], lines[owner]["id"], lines[crv]["id"])
+                for crv, owner in crv_owners(lines).items()
+            ],
+        )
 
     @staticmethod
     def _swap_custom_category_names(conn: sqlite3.Connection) -> None:
@@ -571,6 +601,7 @@ class Database:
                         ),
                     )
 
+                inserted_lines: list[dict[str, Any]] = []
                 for line in receipt.get("items", []):
                     item_num = str(line["item_number"]).strip()
                     raw_desc = str(line.get("raw_description", item_num)).strip()
@@ -646,7 +677,7 @@ class Database:
                             (str(line["image_url"]), item_num),
                         )
 
-                    conn.execute(
+                    cursor = conn.execute(
                         """
                         INSERT INTO receipt_items (
                             transaction_barcode, item_number, raw_description,
@@ -666,6 +697,8 @@ class Database:
                             1 if line.get("is_weight") else 0,
                         ),
                     )
+                    inserted_lines.append({"id": cursor.lastrowid, "item_number": item_num, "raw_description": raw_desc})
+                self._save_crv_links(conn, inserted_lines)
 
         return {
             "inserted_receipts": inserted_receipts,
@@ -728,14 +761,14 @@ class Database:
                 f"""
                 SELECT
                     c.category AS category,
-                    COUNT(ri.id) AS line_count,
-                    COUNT(DISTINCT ri.item_number) AS unique_items,
+                    COUNT(CASE WHEN ri.crv_for_item IS NULL THEN ri.id END) AS line_count,
+                    COUNT(DISTINCT COALESCE(ri.crv_for_item, ri.item_number)) AS unique_items,
                     ROUND(COALESCE(SUM(ri.gross_amount), 0.0), 2) AS gross_spent,
                     ROUND(COALESCE(SUM(ri.discount_amount), 0.0), 2) AS discount_saved,
                     ROUND(COALESCE(SUM(ri.net_amount), 0.0), 2) AS net_spent
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
-                JOIN item_catalog c ON c.item_number = ri.item_number
+                JOIN item_catalog c ON c.item_number = COALESCE(ri.crv_for_item, ri.item_number)
                 WHERE {where_sql}
                 GROUP BY c.category
                 ORDER BY net_spent DESC
@@ -751,7 +784,7 @@ class Database:
                     ROUND(COALESCE(SUM(ri.net_amount), 0.0), 2) AS net_spent
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
-                JOIN item_catalog c ON c.item_number = ri.item_number
+                JOIN item_catalog c ON c.item_number = COALESCE(ri.crv_for_item, ri.item_number)
                 WHERE {where_sql}
                 GROUP BY year_month, c.category
                 ORDER BY year_month ASC, net_spent DESC
@@ -821,6 +854,8 @@ class Database:
     ) -> list[dict[str, Any]]:
         """Returns an aggregated list of items for the period with their categories and totals."""
         where_sql, params = self._build_receipt_filter(start_date, end_date, receipt_type, store)
+        # A CRV line is a deposit for another item, not a product of its own
+        where_sql += " AND ri.crv_for_item IS NULL "
         if category and category != "all":
             where_sql += " AND c.category = ? "
             params.append(category)
@@ -860,7 +895,48 @@ class Database:
                 """,
                 params,
             ).fetchall()
-        return [add_unit_prices(dict(r), "net_spent", "total_quantity") for r in rows]
+            tax_crv = self._tax_crv_by_item(conn, where_sql, params)
+        result = []
+        for r in rows:
+            item = add_unit_prices(dict(r), "net_spent", "total_quantity")
+            item.update(tax_crv.get(item["item_number"], {"tax_amount": None, "crv_amount": 0.0, "tax_crv": 0.0}))
+            result.append(item)
+        return result
+
+    @staticmethod
+    def _tax_crv_by_item(conn: sqlite3.Connection, where_sql: str, params: list[Any]) -> dict[str, dict[str, Any]]:
+        """Sums each item's share of receipt tax and its CRV over the receipts with lines matching the item filter.
+
+        The tax is split per receipt (see add_tax_and_crv), so every line of those receipts is read,
+        not only the lines of the items being listed.
+        """
+        rows = conn.execute(
+            f"""
+            SELECT r.transaction_barcode, r.tax, ri.id, ri.item_number, ri.raw_description, ri.net_amount,
+                   ri.tax_flag, ri.crv_owner_id
+            FROM receipt_items ri
+            JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
+            WHERE r.transaction_barcode IN (
+                SELECT ri.transaction_barcode
+                FROM receipt_items ri
+                JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
+                JOIN item_catalog c ON c.item_number = ri.item_number
+                WHERE {where_sql}
+            )
+            ORDER BY r.transaction_barcode, ri.id
+            """,
+            params,
+        ).fetchall()
+        totals: dict[str, dict[str, Any]] = {}
+        for _, group in groupby(rows, key=lambda row: row["transaction_barcode"]):
+            lines = [dict(row) for row in group]
+            for line in add_tax_and_crv(lines, lines[0]["tax"]):
+                total = totals.setdefault(line["item_number"], {"tax_amount": None, "crv_amount": 0.0, "tax_crv": 0.0})
+                if line["tax_amount"] is not None:
+                    total["tax_amount"] = round((total["tax_amount"] or 0.0) + line["tax_amount"], 2)
+                total["crv_amount"] = round(total["crv_amount"] + line["crv_amount"], 2)
+                total["tax_crv"] = round(total["tax_crv"] + line["tax_crv"], 2)
+        return totals
 
     def search_purchases(self, query: str, limit: int = 500) -> list[dict[str, Any]]:
         """
@@ -890,9 +966,10 @@ class Database:
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
                 JOIN item_catalog c ON c.item_number = ri.item_number
-                WHERE casefold(ri.item_number) LIKE ?
+                WHERE ri.crv_for_item IS NULL
+                  AND (casefold(ri.item_number) LIKE ?
                    OR casefold(ri.raw_description) LIKE ?
-                   OR casefold(c.clean_name) LIKE ?
+                   OR casefold(c.clean_name) LIKE ?)
                 ORDER BY r.transaction_date DESC, ri.id ASC
                 LIMIT ?
                 """,
@@ -947,7 +1024,9 @@ class Database:
                         ri.unit_price,
                         ri.gross_amount,
                         ri.discount_amount,
-                        ri.net_amount
+                        ri.net_amount,
+                        ri.tax_flag,
+                        ri.crv_owner_id
                     FROM receipt_items ri
                     JOIN item_catalog c ON c.item_number = ri.item_number
                     WHERE ri.transaction_barcode = ?
@@ -955,7 +1034,8 @@ class Database:
                     """,
                     (rec["transaction_barcode"],),
                 ).fetchall()
-                rec_dict["items"] = [add_unit_prices(dict(i), "net_amount", "quantity") for i in items]
+                items_with_tax = add_tax_and_crv([dict(i) for i in items], rec["tax"])
+                rec_dict["items"] = [add_unit_prices(i, "net_amount", "quantity") for i in items_with_tax]
                 result.append(rec_dict)
             return result
 
@@ -1049,7 +1129,7 @@ class Database:
                     COALESCE(SUM(CASE WHEN r.receipt_type != 'gas' AND c.category = ? THEN ri.net_amount ELSE 0.0 END), 0.0) AS alcohol_items_net
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
-                JOIN item_catalog c ON c.item_number = ri.item_number
+                JOIN item_catalog c ON c.item_number = COALESCE(ri.crv_for_item, ri.item_number)
                 WHERE {where_sql}
                 """,
                 [ALCOHOL_CATEGORY, *params],
