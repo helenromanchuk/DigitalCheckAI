@@ -124,6 +124,11 @@ DEFAULT_CATEGORY_LABELS_EN: dict[str, str] = {name: en for name, en, _ in _DEFAU
 DEFAULT_CATEGORY_SCOPES: dict[str, str] = {name: scope for name, _, scope in _DEFAULT_CATEGORIES_SPEC}
 
 
+def merge_category_labels_en(custom_labels_en: dict[str, str] | None = None) -> dict[str, str]:
+    """Combines custom and default English category labels, with defaults taking precedence."""
+    return {**(custom_labels_en or {}), **DEFAULT_CATEGORY_LABELS_EN}
+
+
 def get_gemini_api_key() -> str:
     """Returns the current GEMINI_API_KEY from the environment or the .env file."""
     load_dotenv(ENV_PATH, override=True)

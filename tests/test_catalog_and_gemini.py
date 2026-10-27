@@ -10,7 +10,7 @@ def test_first_time_gemini_classification_and_manual_override(tmp_path: Path, mo
     db = Database(tmp_path / "test_costco.db")
     gemini_calls: list[list[dict]] = []
 
-    def fake_gemini_batch(self, batch, categories, api_key, **_kwargs):
+    def fake_gemini_batch(self, batch, categories, client, custom_labels_en=None):
         gemini_calls.append(batch)
         return [
             {
@@ -110,11 +110,9 @@ def test_partial_receipt_does_not_wipe_existing_items(tmp_path: Path):
     assert count == 1
 
 
-def test_gemini_unknown_item_numbers_are_ignored(tmp_path: Path, monkeypatch):
+def test_gemini_unknown_item_numbers_are_ignored(tmp_path: Path):
     import json
     import types as pytypes
-
-    from google import genai
 
     db = Database(tmp_path / "test_costco.db")
     db.upsert_receipts(
@@ -129,22 +127,29 @@ def test_gemini_unknown_item_numbers_are_ignored(tmp_path: Path, monkeypatch):
 
     answer = {
         "items": [
-            {"id": 0, "clean_name": "Olive Oil", "category": "Бакалея, масла, специи и консервы"},
-            {"id": 999, "clean_name": "Invented", "category": "Прочее"},
-            {"id": -1, "clean_name": "Negative", "category": "Прочее"},
-            {"id": True, "clean_name": "BoolNotInt", "category": "Прочее"},
+            {
+                "id": 0,
+                "item_number": "0123456 ",
+                "clean_name": "Olive Oil",
+                "category": "Бакалея, масла, специи и консервы",
+            },
+            # Wrong item_number for id=0 (e.g. if Gemini skipped an item and shifted neighbors) must be rejected
+            {"id": 0, "item_number": "999999", "clean_name": "ShiftedNeighbor", "category": "Прочее"},
+            {"id": 999, "item_number": "123456", "clean_name": "OutOfRangeId", "category": "Прочее"},
+            {"id": -1, "item_number": "123456", "clean_name": "NegativeId", "category": "Прочее"},
+            {"id": True, "item_number": "123456", "clean_name": "BoolNotInt", "category": "Прочее"},
         ]
     }
+    fake_client = pytypes.SimpleNamespace(
+        models=pytypes.SimpleNamespace(
+            generate_content=lambda **kw: pytypes.SimpleNamespace(text=json.dumps(answer, ensure_ascii=False))
+        )
+    )
 
-    class FakeClient:
-        def __init__(self, **kwargs):
-            self.models = pytypes.SimpleNamespace(
-                generate_content=lambda **kw: pytypes.SimpleNamespace(text=json.dumps(answer, ensure_ascii=False))
-            )
-
-    monkeypatch.setattr(genai, "Client", FakeClient)
     results = GeminiItemClassifier(db)._call_gemini_batch(
-        [{"item_number": "123456", "raw_description": "KS EVOO"}], db.get_all_categories(), "key"
+        [{"item_number": "123456", "raw_description": "KS EVOO"}],
+        db.get_all_categories(),
+        fake_client,
     )
 
     assert [r["item_number"] for r in results] == ["123456"]
@@ -249,36 +254,37 @@ def test_resync_moves_pending_row_to_parser_category(tmp_path: Path):
     assert (row["category"], row["classified_by"]) == ("Авто и заправка (Gas Station)", "parser")
 
 
-def test_gemini_item_numbers_differing_by_leading_zeros_and_duplicate_ids(tmp_path: Path, monkeypatch):
+def test_gemini_item_numbers_differing_by_leading_zeros_and_duplicate_ids(tmp_path: Path):
     import json
     import types as pytypes
-
-    from google import genai
 
     db = Database(tmp_path / "test_costco.db")
     answer = {
         "items": [
-            {"id": 1, "clean_name": "First Draft", "category": "Прочее"},
-            {"id": "", "clean_name": "Empty", "category": "Прочее"},
-            {"id": 1, "clean_name": "Exact", "category": "Прочее"},
+            # Swapped item_number ('123' at id=0 where '0123' is expected) is rejected because '123' is in the batch
+            {"id": 0, "item_number": "123", "clean_name": "Swapped", "category": "Прочее"},
+            {"id": 1, "item_number": "123", "clean_name": "First Draft", "category": "Прочее"},
+            {"id": "", "item_number": "123", "clean_name": "Empty", "category": "Прочее"},
+            # Duplicate answer for id=1 keeps the last answer, and preserves category with trailing space
+            {"id": 1, "item_number": "123", "clean_name": "Exact", "category": "Категория с пробелом "},
         ]
     }
-
-    class FakeClient:
-        def __init__(self, **kwargs):
-            self.models = pytypes.SimpleNamespace(
-                generate_content=lambda **kw: pytypes.SimpleNamespace(text=json.dumps(answer, ensure_ascii=False))
-            )
-
-    monkeypatch.setattr(genai, "Client", FakeClient)
+    fake_client = pytypes.SimpleNamespace(
+        models=pytypes.SimpleNamespace(
+            generate_content=lambda **kw: pytypes.SimpleNamespace(text=json.dumps(answer, ensure_ascii=False))
+        )
+    )
     batch = [
         {"item_number": "0123", "raw_description": "A"},
         {"item_number": "123", "raw_description": "B"},
         {"item_number": "000", "raw_description": "C"},
     ]
-    results = GeminiItemClassifier(db)._call_gemini_batch(batch, db.get_all_categories(), "key")
+    categories = [*db.get_all_categories(), "Категория с пробелом "]
+    results = GeminiItemClassifier(db)._call_gemini_batch(batch, categories, fake_client)
 
-    assert [(r["item_number"], r["clean_name"]) for r in results] == [("123", "Exact")]
+    assert [(r["item_number"], r["clean_name"], r["category"]) for r in results] == [
+        ("123", "Exact", "Категория с пробелом ")
+    ]
 
 
 def test_migration_unlocks_groceries_an_old_parser_took_for_fuel(tmp_path: Path):
@@ -387,12 +393,11 @@ def test_custom_category_english_name_can_be_added_later(tmp_path: Path):
     assert db.get_all_categories().count("Питомцы") == 1
 
 
-def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path, monkeypatch):
+def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path):
     import json
     import re
     import types as pytypes
 
-    from google import genai
     from google.genai._transformers import t_schema
 
     from app.categorizer.gemini_classifier import (
@@ -408,38 +413,37 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path, monkey
     db.add_custom_category("Прочее", "Misc")
     captured: dict = {}
 
-    class FakeClient:
-        def __init__(self, **kwargs):
-            def gen(**kw):
-                captured.update(kw)
-                return pytypes.SimpleNamespace(
-                    text=json.dumps(
+    def gen(**kw):
+        captured.update(kw)
+        return pytypes.SimpleNamespace(
+            text=json.dumps(
+                {
+                    "items": [
                         {
-                            "items": [
-                                {
-                                    "id": 0,
-                                    "clean_name": "O Organics Broth (32 fl oz)",
-                                    "category": "Бакалея, масла, специи и консервы",
-                                },
-                                {
-                                    "id": 1,
-                                    "clean_name": "Kirkland Dog Treats (5 lb)",
-                                    "category": "Питомцы",
-                                },
-                                {
-                                    "id": 2,
-                                    "clean_name": "Mystery Item",
-                                    "category": "Nonexistent Category",
-                                },
-                            ]
+                            "id": 0,
+                            "item_number": "7989311562",
+                            "clean_name": "O Organics Broth (32 fl oz)",
+                            "category": "Бакалея, масла, специи и консервы",
                         },
-                        ensure_ascii=False,
-                    )
-                )
+                        {
+                            "id": 1,
+                            "item_number": "9001",
+                            "clean_name": "Kirkland Dog Treats (5 lb)",
+                            "category": "Питомцы",
+                        },
+                        {
+                            "id": 2,
+                            "item_number": "9002",
+                            "clean_name": "Mystery Item",
+                            "category": "Nonexistent Category",
+                        },
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        )
 
-            self.models = pytypes.SimpleNamespace(generate_content=gen)
-
-    monkeypatch.setattr(genai, "Client", FakeClient)
+    fake_client = pytypes.SimpleNamespace(models=pytypes.SimpleNamespace(generate_content=gen))
     categories = db.get_all_categories()
     batch = [
         {"item_number": "SWY-7989311562", "raw_description": "O ORGNC BROTH 32OZ", "sample_unit_price": 3.49},
@@ -455,7 +459,8 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path, monkey
     assert not re.search(r"[А-Яа-яЁё]", SYSTEM_INSTRUCTION)
     assert not re.search(r"[А-Яа-яЁё]", json.dumps(CategorizedItemSchema.model_json_schema(), ensure_ascii=False))
 
-    prompt = _build_classification_prompt(batch, categories, db.get_category_labels_en())
+    custom_labels_en = db.get_category_labels_en()
+    prompt = _build_classification_prompt(batch, categories, custom_labels_en)
     for cat in categories:
         assert cat in prompt
     assert '"id": 0' in prompt and '"id": 1' in prompt and '"id": 2' in prompt
@@ -473,7 +478,7 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path, monkey
     assert genai_cat.enum == categories
     assert genai_cat.description == CategorizedItemSchema.model_fields["category"].description
 
-    results = GeminiItemClassifier(db)._call_gemini_batch(batch, categories, "key")
+    results = GeminiItemClassifier(db)._call_gemini_batch(batch, categories, fake_client, custom_labels_en)
     assert captured["config"].system_instruction == SYSTEM_INSTRUCTION
     assert "SWY-7989311562" in captured["contents"]
     assert results == [
@@ -498,11 +503,9 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path, monkey
     ]
 
 
-def test_safeway_and_costco_same_digits_never_overwrite_each_other(tmp_path: Path, monkeypatch):
+def test_safeway_and_costco_same_digits_never_overwrite_each_other(tmp_path: Path):
     import json
     import types as pytypes
-
-    from google import genai
 
     db = Database(tmp_path / "test_costco.db")
     categories = db.get_all_categories()
@@ -511,41 +514,70 @@ def test_safeway_and_costco_same_digits_never_overwrite_each_other(tmp_path: Pat
         {"item_number": "SWY-1234", "raw_description": "O ORGNC MILK"},
     ]
 
-    def set_answer(items):
-        monkeypatch.setattr(
-            genai,
-            "Client",
-            lambda **kw: pytypes.SimpleNamespace(
-                models=pytypes.SimpleNamespace(
-                    generate_content=lambda **gkw: pytypes.SimpleNamespace(
-                        text=json.dumps({"items": items}, ensure_ascii=False)
-                    )
+    def make_client(items):
+        return pytypes.SimpleNamespace(
+            models=pytypes.SimpleNamespace(
+                generate_content=lambda **gkw: pytypes.SimpleNamespace(
+                    text=json.dumps({"items": items}, ensure_ascii=False)
                 )
-            ),
+            )
         )
 
     # 1. Both answered -> both match their respective item
-    set_answer(
-        [
-            {"id": 0, "clean_name": "Kirkland Olive Oil", "category": "Бакалея, масла, специи и консервы"},
-            {"id": 1, "clean_name": "O Organics Milk", "category": "Молочные продукты, сыр и яйца"},
-        ]
+    res_both = GeminiItemClassifier(db)._call_gemini_batch(
+        batch,
+        categories,
+        make_client(
+            [
+                {
+                    "id": 0,
+                    "item_number": "01234",
+                    "clean_name": "Kirkland Olive Oil",
+                    "category": "Бакалея, масла, специи и консервы",
+                },
+                {
+                    "id": 1,
+                    "item_number": "swy-01234",
+                    "clean_name": "O Organics Milk",
+                    "category": "Молочные продукты, сыр и яйца",
+                },
+            ]
+        ),
     )
-    res_both = GeminiItemClassifier(db)._call_gemini_batch(batch, categories, "key")
     assert [(r["item_number"], r["clean_name"]) for r in res_both] == [
         ("1234", "Kirkland Olive Oil"),
         ("SWY-1234", "O Organics Milk"),
     ]
 
     # 2. Only Costco (id=0) answered -> Costco item is saved, not discarded
-    set_answer([{"id": 0, "clean_name": "Kirkland Olive Oil", "category": "Бакалея, масла, специи и консервы"}])
-    res_costco_only = GeminiItemClassifier(db)._call_gemini_batch(batch, categories, "key")
+    res_costco_only = GeminiItemClassifier(db)._call_gemini_batch(
+        batch,
+        categories,
+        make_client(
+            [
+                {
+                    "id": 0,
+                    "item_number": "1234",
+                    "clean_name": "Kirkland Olive Oil",
+                    "category": "Бакалея, масла, специи и консервы",
+                }
+            ]
+        ),
+    )
     assert [(r["item_number"], r["clean_name"]) for r in res_costco_only] == [("1234", "Kirkland Olive Oil")]
 
-    # 3. Only Safeway (id=1) answered -> Safeway item is saved, Costco 1234 is untouched
-    set_answer([{"id": 1, "clean_name": "O Organics Milk", "category": "Молочные продукты, сыр и яйца"}])
-    res_swy_only = GeminiItemClassifier(db)._call_gemini_batch(batch, categories, "key")
-    assert [(r["item_number"], r["clean_name"]) for r in res_swy_only] == [("SWY-1234", "O Organics Milk")]
+    # 3. Swapped or dropped-prefix collision in a batch with both 1234 and SWY-1234 is rejected
+    res_swapped = GeminiItemClassifier(db)._call_gemini_batch(
+        batch,
+        categories,
+        make_client(
+            [
+                {"id": 0, "item_number": "SWY-1234", "clean_name": "Wrong", "category": "Прочее"},
+                {"id": 1, "item_number": "1234", "clean_name": "Ambiguous", "category": "Прочее"},
+            ]
+        ),
+    )
+    assert res_swapped == []
 
 
 def test_classify_new_items_reuses_client_and_falls_back_on_label_error(tmp_path: Path, monkeypatch):
@@ -563,14 +595,27 @@ def test_classify_new_items_reuses_client_and_falls_back_on_label_error(tmp_path
         def __init__(self, **kwargs):
             nonlocal client_creations
             client_creations += 1
-            self.models = pytypes.SimpleNamespace(
-                generate_content=lambda **kw: pytypes.SimpleNamespace(
+
+            def gen(**kw):
+                payload = json.loads(kw["contents"].split("Items to decode and categorize:\n", 1)[1])
+                return pytypes.SimpleNamespace(
                     text=json.dumps(
-                        {"items": [{"id": 0, "clean_name": "Decoded", "category": "Прочее"}]},
+                        {
+                            "items": [
+                                {
+                                    "id": p["id"],
+                                    "item_number": p["item_number"],
+                                    "clean_name": "Decoded",
+                                    "category": "Прочее",
+                                }
+                                for p in payload
+                            ]
+                        },
                         ensure_ascii=False,
                     )
                 )
-            )
+
+            self.models = pytypes.SimpleNamespace(generate_content=gen)
 
     monkeypatch.setattr(genai, "Client", FakeClient)
     items = [
@@ -592,7 +637,10 @@ def test_classify_new_items_reuses_client_and_falls_back_on_label_error(tmp_path
     assert db.get_existing_catalog_map(["103"])["103"]["classified_by"] == "fallback"
 
 
-def test_config_api_returns_merged_english_category_labels(tmp_path: Path):
+def test_default_category_labels_en_match_frontend_and_config_api(tmp_path: Path):
+    import json
+    import re
+
     from fastapi.testclient import TestClient
 
     from app.api.routes import get_db
@@ -600,7 +648,10 @@ def test_config_api_returns_merged_english_category_labels(tmp_path: Path):
     from app.main import app
 
     i18n_js = (BASE_DIR / "static" / "i18n.js").read_text(encoding="utf-8")
-    assert "CATEGORY_LABELS_EN" not in i18n_js
+    match = re.search(r"const\s+CATEGORY_LABELS_EN\s*=\s*(\{.*?\});", i18n_js, flags=re.DOTALL)
+    assert match is not None
+    js_labels = json.loads(match.group(1))
+    assert DEFAULT_CATEGORY_LABELS_EN == js_labels
     assert list(DEFAULT_CATEGORY_LABELS_EN) == DEFAULT_CATEGORIES
 
     test_db = Database(tmp_path / "config_labels.db")
@@ -620,29 +671,3 @@ def test_config_api_returns_merged_english_category_labels(tmp_path: Path):
         assert labels["Прочее"] == "Other"
     finally:
         app.dependency_overrides.clear()
-
-
-def test_gemini_request_and_response_logged_at_debug(tmp_path: Path, caplog):
-    import json
-    import logging
-    import types as pytypes
-
-    db = Database(tmp_path / "test_costco.db")
-    answer = {"items": [{"id": 0, "clean_name": "Kirkland Olive Oil", "category": "Прочее"}]}
-    usage = pytypes.SimpleNamespace(prompt_token_count=120, candidates_token_count=30)
-    client = pytypes.SimpleNamespace(
-        models=pytypes.SimpleNamespace(
-            generate_content=lambda **kw: pytypes.SimpleNamespace(
-                text=json.dumps(answer, ensure_ascii=False), usage_metadata=usage
-            )
-        )
-    )
-    batch = [{"item_number": "1234", "raw_description": "KS ORG EVOO", "sample_unit_price": 9.99}]
-
-    with caplog.at_level(logging.DEBUG, logger="app.categorizer.gemini_classifier"):
-        GeminiItemClassifier(db)._call_gemini_batch(batch, db.get_all_categories(), "key", {}, client=client)
-
-    log = caplog.text
-    assert "KS ORG EVOO" in log
-    assert "Kirkland Olive Oil" in log
-    assert "120 in / 30 out" in log
