@@ -9,12 +9,14 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, create_model
 
 from app.config import (
-    DEFAULT_CATEGORY_LABELS_EN,
+    ALCOHOL_CATEGORY,
+    DEFAULT_CATEGORIES,
     DEFAULT_CATEGORY_SCOPES,
     FUEL_CATEGORY,
+    OTHER_CATEGORY,
     get_gemini_api_key,
     get_gemini_model,
-    merge_category_labels_en,
+    is_english_category_name,
 )
 from app.database import Database
 
@@ -50,10 +52,7 @@ class CategorizedBatchSchema(BaseModel):
     items: list[CategorizedItemSchema]
 
 
-_CATEGORY_RULES_TEXT = "\n".join(
-    f"- **{en_label}**: {DEFAULT_CATEGORY_SCOPES.get(cat_key, '')}"
-    for cat_key, en_label in DEFAULT_CATEGORY_LABELS_EN.items()
-)
+_CATEGORY_RULES_TEXT = "\n".join(f"- **{name}**: {DEFAULT_CATEGORY_SCOPES[name]}" for name in DEFAULT_CATEGORIES)
 
 SYSTEM_INSTRUCTION = (
     "You are an expert on US retail products, item numbers, and receipt descriptions from Costco "
@@ -98,10 +97,10 @@ SYSTEM_INSTRUCTION = (
     "### 2. Rules for Selecting `category`\n"
     "- Return the exact `category` value from `Allowed categories` in the user prompt.\n"
     "- **Custom user-defined categories take priority**: If `Allowed categories` includes custom categories beyond "
-    f"the {len(DEFAULT_CATEGORY_LABELS_EN)} defaults (e.g., `Kids`, `Toys`, `Pets`, `Baby`), always prefer a "
+    f"the {len(DEFAULT_CATEGORIES)} defaults (e.g., `Kids`, `Toys`, `Pets`, `Baby`), always prefer a "
     "matching custom category over broad defaults or `Other` (for example, `LEGO` or dolls go to a kids/toys "
     "category if present, and pet items go to a pets category if present).\n"
-    "- Default category boundaries (shown by their `english_label`):\n"
+    "- Default category boundaries:\n"
     f"{_CATEGORY_RULES_TEXT}\n\n"
     "### 3. Output Completeness Requirements\n"
     "- Return an entry for **every** item in the input list in the exact same order.\n"
@@ -125,17 +124,8 @@ def _build_batch_schema(categories: tuple[str, ...]) -> type[BaseModel]:
     )
 
 
-def _build_classification_prompt(
-    batch: list[dict[str, Any]],
-    categories: list[str],
-    category_labels_en: dict[str, str] | None = None,
-) -> str:
+def _build_classification_prompt(batch: list[dict[str, Any]], categories: list[str]) -> str:
     """Builds the per-batch user prompt with the allowed categories and items (with integer ids) to classify."""
-    labels_en = merge_category_labels_en(category_labels_en)
-    allowed_entries: list[str | dict[str, str]] = [
-        {"category": c, "english_label": labels_en[c]} if c in labels_en and labels_en[c] != c else c
-        for c in categories
-    ]
     items_payload = [
         {
             "id": idx,
@@ -146,8 +136,8 @@ def _build_classification_prompt(
         for idx, i in enumerate(batch)
     ]
     return (
-        "Allowed categories (set `category` to the exact `category` value):\n"
-        f"{json.dumps(allowed_entries, ensure_ascii=False, separators=(',', ':'))}\n\n"
+        "Allowed categories (set `category` to one of these values exactly):\n"
+        f"{json.dumps(categories, ensure_ascii=False, separators=(',', ':'))}\n\n"
         "Items to decode and categorize:\n"
         f"{json.dumps(items_payload, ensure_ascii=False, separators=(',', ':'))}"
     )
@@ -162,7 +152,7 @@ FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
     ),
     (
         ["RIBEYE", "SALMON", "BEEF", "PORK", "CHICKEN", "SHRIMP", "STEAK", "LAMB", "TURKEY", "BACON"],
-        "Мясо, птица и морепродукты",
+        "Meat, poultry & seafood",
         {
             "USDA CHOICE RIBEYE": "USDA Choice Ribeye Steaks",
             "WILD ALASKAN SALMON": "Wild Alaskan Salmon Fillet",
@@ -170,7 +160,7 @@ FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
     ),
     (
         ["ROTISSERIE", "CROISSANT", "BAGEL", "MUFFIN", "BREAD", "DELI", "PIZZA", "CAKE"],
-        "Выпечка, хлеб и готовая еда (Deli)",
+        "Bakery, bread & prepared food (Deli)",
         {
             "ROTISSERIE CHKN": "Kirkland Signature Rotisserie Chicken",
             "CROISSANTS 12CT": "Costco Bakery Croissants (12 ct)",
@@ -178,7 +168,7 @@ FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
     ),
     (
         ["STRAWBERR", "AVOCADO", "BANANA", "APPLE", "SPINACH", "SALAD", "TOMATO", "BLUEBERR", "GRAPE", "PRODUCE"],
-        "Овощи, фрукты и ягоды",
+        "Fruits, vegetables & berries",
         {
             "ORG STRAWBERRIES": "Organic Strawberries",
             "ORG AVOCADOS 6CT": "Organic Avocados (6 ct)",
@@ -186,7 +176,7 @@ FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
     ),
     (
         ["EGGS", "BUTTER", "MILK", "CHEESE", "YOGURT", "CREAM"],
-        "Молочные продукты, сыр и яйца",
+        "Dairy, cheese & eggs",
         {
             "KS ORG EGGS 24CT": "Kirkland Signature Organic Eggs (24 ct)",
             "KERRYGOLD BUTTER": "Kerrygold Pure Irish Butter",
@@ -194,7 +184,7 @@ FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
     ),
     (
         ["EVOO", "OLIVE OIL", "RICE", "PASTA", "COFFEE", "SAUCE", "HONEY", "SPICE", "FLOUR"],
-        "Бакалея, масла, специи и консервы",
+        "Pantry, oils, spices & canned goods",
         {
             "KS ORG EVOO 2L BOTTLE": "Kirkland Signature Organic Extra Virgin Olive Oil (2 L)",
             "KS ORG EVOO": "Kirkland Signature Organic Extra Virgin Olive Oil",
@@ -202,14 +192,14 @@ FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
     ),
     (
         ["NUTS", "CHOC", "CHIPS", "COOKIE", "SNACK", "WATER", "SODA", "JUICE"],
-        "Снеки, сладости, орехи и напитки",
+        "Snacks, sweets, nuts & drinks",
         {
             "KS MIXED NUTS 40OZ": "Kirkland Signature Mixed Nuts (40 oz)",
         },
     ),
     (
         ["CHARMIN", "BATH TISSUE", "TIDE", "BOUNTY", "CASCADE", "DETERGENT", "TRASH BAG", "PAPER TOWEL"],
-        "Бытовая химия, бумага и уборка",
+        "Household, paper & cleaning",
         {
             "CHARMIN ULTRA SOFT": "Charmin Ultra Soft Toilet Paper",
             "KS BATH TISSUE": "Kirkland Signature Bath Tissue",
@@ -218,35 +208,35 @@ FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
     ),
     (
         ["COQ10", "VITAMIN", "ADVIL", "TYLENOL", "SHAMPOO", "TOOTHPASTE", "LOTION", "ALLERGY", "SUNSCREEN"],
-        "Здоровье, аптека, витамины и гигиена",
+        "Health, pharmacy, vitamins & personal care",
         {
             "COQ10 300MG 100CT": "Kirkland Signature CoQ10 300 mg (100 softgels)",
         },
     ),
     (
         ["PROSECCO", "WINE", "VODKA", "BEER", "WHISKEY", "TEQUILA", "CHAMPAGNE"],
-        "Алкоголь",
+        ALCOHOL_CATEGORY,
         {
             "KIRKLAND PROSECCO": "Kirkland Signature Asolo Prosecco Superiore DOCG",
         },
     ),
     (
         ["AIRPODS", "IPAD", "MACBOOK", "TV", "SAMSUNG", "SONY", "USB", "BATTERY", "CHARGER"],
-        "Электроника и техника",
+        "Electronics & appliances",
         {
             "APPLE AIRPODS PRO 2ND GEN USB-C": "Apple AirPods Pro 2 (USB-C)",
         },
     ),
     (
         ["JEANS", "LEVIS", "SHIRT", "JACKET", "SOCKS", "SHOES", "PANTS", "HOODIE"],
-        "Одежда и обувь",
+        "Clothing & shoes",
         {
             "LEVIS MENS JEANS": "Levi's Men's Jeans",
         },
     ),
     (
         ["PYREX", "STORAGE", "PAN", "TOWEL", "PILLOW", "BLANKET", "BLENDER"],
-        "Товары для дома, кухни и сада",
+        "Home, kitchen & garden",
         {
             "PYREX GLASS STORAGE": "Pyrex Glass Food Storage Set",
         },
@@ -287,7 +277,7 @@ def fallback_categorize_item(item_number: str, raw_description: str) -> dict[str
         "item_number": item_number,
         "raw_description": raw_description,
         "clean_name": raw_description.title(),
-        "category": "Прочее",
+        "category": OTHER_CATEGORY,
     }
 
     # Exact names win over keywords from any rule (otherwise "APPLE AIRPODS..." ends up in produce)
@@ -360,14 +350,19 @@ class GeminiItemClassifier:
             return {"classified_count": 0, "provider": "none"}
 
         api_key = get_gemini_api_key()
-        categories = self.db.get_all_categories()
+        # Gemini only gets English text: a category without an English name (from an old database) is left out
+        categories = []
+        for cat in self.db.get_all_categories():
+            if is_english_category_name(cat):
+                categories.append(cat)
+            else:
+                logger.warning("Категория %r не на английском и не отправляется в Gemini; переименуйте её.", cat)
 
         if not api_key or api_key == "your_gemini_api_key_here":
             logger.info("GEMINI_API_KEY не задан — используется локальный резервный классификатор.")
             return {"classified_count": self._save_fallback(items), "provider": "fallback"}
 
         try:
-            custom_labels_en = self.db.get_category_labels_en()
             client = _make_gemini_client(api_key)
         except Exception as exc:
             logger.warning("Не удалось подготовить вызов Gemini API (%s), применяем fallback.", exc)
@@ -377,7 +372,7 @@ class GeminiItemClassifier:
         for start in range(0, len(items), self.batch_size):
             batch = items[start : start + self.batch_size]
             try:
-                batch_results = self._call_gemini_batch(batch, categories, client, custom_labels_en)
+                batch_results = self._call_gemini_batch(batch, categories, client)
                 total_saved += self.db.save_categorized_items(batch_results, classified_by="gemini")
             except Exception as exc:
                 logger.warning("Ошибка вызова Gemini API (%s), применяем fallback для пакета.", exc)
@@ -405,13 +400,12 @@ class GeminiItemClassifier:
         batch: list[dict[str, Any]],
         categories: list[str],
         client: Any,
-        custom_labels_en: dict[str, str] | None = None,
     ) -> list[dict[str, str]]:
         """Calls the Google GenAI SDK with a strict JSON schema for a batch of items."""
         from google.genai import types
 
         model_name = get_gemini_model()
-        prompt = _build_classification_prompt(batch, categories, custom_labels_en)
+        prompt = _build_classification_prompt(batch, categories)
         batch_schema = _build_batch_schema(tuple(categories))
 
         logger.debug("Запрос к Gemini (%s), товаров: %d:\n%s", model_name, len(batch), prompt)
@@ -460,7 +454,7 @@ class GeminiItemClassifier:
             cat = str(entry.get("category", ""))
             if cat not in categories:
                 logger.warning("Gemini вернул неизвестную категорию %r для артикула %s", cat, inum)
-                cat = "Прочее"
+                cat = OTHER_CATEGORY
             results_by_id[item_id] = {
                 "item_number": inum,
                 "raw_description": raw_desc or inum,

@@ -154,7 +154,7 @@ async function loadConfig() {
 
 function renderConfig(data) {
   availableCategories = data.categories || [];
-  categoryLabelsEn = data.category_labels_en || {};
+  categoryLabelsRu = data.category_labels_ru || {};
 
   const dot = document.getElementById("geminiStatusDot");
   const txt = document.getElementById("geminiStatusText");
@@ -926,16 +926,16 @@ function closeNewCategoryModal() {
 
 async function createNewCategory() {
   const name = document.getElementById("newCategoryInput").value.trim();
-  const nameEn = document.getElementById("newCategoryEnInput").value.trim();
+  const nameRu = document.getElementById("newCategoryRuInput").value.trim();
   if (!name) return;
   const res = await fetch("/api/categories", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, name_en: nameEn })
+    body: JSON.stringify({ name, name_ru: nameRu })
   });
   if (res.ok) {
     document.getElementById("newCategoryInput").value = "";
-    document.getElementById("newCategoryEnInput").value = "";
+    document.getElementById("newCategoryRuInput").value = "";
     closeNewCategoryModal();
     showBanner(t("newCat.added", { name }), "success");
     await refreshAll();

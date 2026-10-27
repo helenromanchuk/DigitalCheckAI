@@ -159,6 +159,7 @@ const I18N = {
     "error.item_not_found": "Артикул {item} не найден в справочнике.",
     "error.category_reserved": "Название «{name}» уже занято другой категорией. Выберите другое.",
     "error.category_empty": "Введите название категории.",
+    "error.category_not_english": "Название «{name}» должно быть на английском: его получает Gemini. Русское название укажите во втором поле.",
     "error.unknown": "{message}",
     "sync.success": "Успешно загружено чеков: {fetched} (новых: {inserted}). Расшифровано новых Item#: {newItems} ({provider}).",
 
@@ -197,11 +198,11 @@ const I18N = {
     "help.copyFailed": "Не удалось скопировать автоматически. Откройте «посмотреть код» и скопируйте текст вручную.",
 
     "newCat.title": "Добавить свою категорию",
-    "newCat.label": "Название категории",
-    "newCat.placeholder": "Например: Детские товары или Питомцы",
-    "newCat.enLabel": "Название на английском (необязательно)",
-    "newCat.enPlaceholder": "Например: Kids или Pets",
-    "newCat.enHint": "Показывается, когда интерфейс на английском. Чтобы перевести уже созданную категорию, введите её название ещё раз вместе с английским.",
+    "newCat.label": "Название на английском",
+    "newCat.placeholder": "Например: Kids или Pets",
+    "newCat.ruLabel": "Название на русском (необязательно)",
+    "newCat.ruPlaceholder": "Например: Детские товары или Питомцы",
+    "newCat.ruHint": "Gemini получает только английское название, русское показывается в интерфейсе. Чтобы перевести уже созданную категорию, введите её английское название ещё раз вместе с русским.",
     "newCat.added": "Категория «{name}» добавлена! Теперь её можно выбрать для любого товара.",
     "newCat.failed": "Не удалось добавить категорию.",
     "config.loadFailed": "Не удалось загрузить настройки приложения. Обновите страницу."
@@ -364,6 +365,7 @@ const I18N = {
     "error.item_not_found": "Item {item} not found in the catalog.",
     "error.category_reserved": "“{name}” is already used by another category. Please choose another name.",
     "error.category_empty": "Please enter a category name.",
+    "error.category_not_english": "“{name}” must be in English: Gemini receives this name. Put the Russian name in the second field.",
     "error.unknown": "{message}",
     "sync.success": "Receipts downloaded: {fetched} (new: {inserted}). New Item #s decoded: {newItems} ({provider}).",
 
@@ -402,11 +404,11 @@ const I18N = {
     "help.copyFailed": "Couldn't copy automatically. Open “view code” and copy the text by hand.",
 
     "newCat.title": "Add a custom category",
-    "newCat.label": "Category name",
+    "newCat.label": "Category name (English)",
     "newCat.placeholder": "e.g. Kids or Pets",
-    "newCat.enLabel": "English name (optional)",
-    "newCat.enPlaceholder": "e.g. Kids or Pets",
-    "newCat.enHint": "Shown when the interface is in English. To translate an existing category, enter its name again together with the English one.",
+    "newCat.ruLabel": "Russian name (optional)",
+    "newCat.ruPlaceholder": "e.g. Детские товары",
+    "newCat.ruHint": "Gemini only gets the English name; the Russian one is shown when the interface is in Russian. To translate an existing category, enter its English name again together with the Russian one.",
     "newCat.added": "Category “{name}” added! You can now assign it to any item.",
     "newCat.failed": "Could not add the category.",
     "config.loadFailed": "Could not load the app settings. Please reload the page."
@@ -430,12 +432,12 @@ function t(key, params = {}) {
   return template.replace(/\{(\w+)\}/g, (match, name) => (name in params ? String(params[name]) : match));
 }
 
-// Categories are stored under their Russian names; English names (defaults and custom) come from /api/config
-let categoryLabelsEn = {};
+// Categories are stored under their English names; Russian labels (defaults and custom) come from /api/config
+let categoryLabelsRu = {};
 
 function categoryLabel(category) {
-  if (currentLang !== "en") return category;
-  return categoryLabelsEn[category] || category;
+  if (currentLang !== "ru") return category;
+  return categoryLabelsRu[category] || category;
 }
 
 function applyStaticTranslations() {

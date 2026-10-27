@@ -75,22 +75,22 @@ def test_api_import_stats_and_category_override(tmp_path: Path, monkeypatch):
     assert res_gas.status_code == 200
     gas_stats = res_gas.json()
     assert gas_stats["summary"]["receipt_count"] == 1
-    assert gas_stats["by_category"][0]["category"] == "Авто и заправка (Gas Station)"
+    assert gas_stats["by_category"][0]["category"] == "Auto & fuel (Gas Station)"
 
     # 4. Change the category of item #678910 via PATCH /api/items/678910
     res_patch = client.patch(
         "/api/items/678910",
-        json={"category": "Подарки и кулинария", "clean_name": "Масло оливковое KS 2L"},
+        json={"category": "Gifts & cooking", "clean_name": "KS Olive Oil 2L"},
     )
     assert res_patch.status_code == 200
     patched = res_patch.json()["item"]
-    assert patched["category"] == "Подарки и кулинария"
+    assert patched["category"] == "Gifts & cooking"
     assert patched["is_manual_override"] == 1
 
     # The new category appears in stats with the total of 2 purchases (24.99 * 2 = 49.98)
     res_stats_after = client.get("/api/stats?receipt_type=all")
     cats_after = {c["category"]: c["net_spent"] for c in res_stats_after.json()["by_category"]}
-    assert cats_after.get("Подарки и кулинария") == 49.98
+    assert cats_after.get("Gifts & cooking") == 49.98
 
     app.dependency_overrides.clear()
 

@@ -1,5 +1,6 @@
 """DigitalCheckAI configuration."""
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -18,101 +19,104 @@ BROWSER_PROFILE_DIR = DATA_DIR / "browser_profile"
 IMAGES_DIR = DATA_DIR / "images"
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
-FUEL_CATEGORY = "Авто и заправка (Gas Station)"
+FUEL_CATEGORY = "Auto & fuel (Gas Station)"
+ALCOHOL_CATEGORY = "Alcohol"
+OTHER_CATEGORY = "Other"
 
-# Single source of truth for default categories: (canonical DB name, English UI/prompt label, classifier scope)
+# Single source of truth for default categories: (canonical name stored in the DB and sent to Gemini,
+# Russian UI label, classifier scope). Gemini only ever sees the English names
 _DEFAULT_CATEGORIES_SPEC: list[tuple[str, str, str]] = [
     (
-        "Мясо, птица и морепродукты",
         "Meat, poultry & seafood",
+        "Мясо, птица и морепродукты",
         "fresh/chilled raw meat, poultry, fish, seafood, bacon, sausages & links "
         "(Aidells, Kiolbassa, linguica, franks), salami, prosciutto, charcuterie, and packaged sliced deli meats "
         "(sliced turkey, ham, roast beef).",
     ),
     (
-        "Овощи, фрукты и ягоды",
         "Fruits, vegetables & berries",
+        "Овощи, фрукты и ягоды",
         "fresh produce, fruits, berries, vegetables, fresh herbs, salad mixes & kits, kimchi, living potted herbs.",
     ),
     (
-        "Молочные продукты, сыр и яйца",
         "Dairy, cheese & eggs",
+        "Молочные продукты, сыр и яйца",
         "milk, cream, butter, sour cream, yogurt, cultured/probiotic dairy drinks (Cool Plus, kefir), "
         "all cheeses, eggs.",
     ),
     (
-        "Выпечка, хлеб и готовая еда (Deli)",
         "Bakery, bread & prepared food (Deli)",
+        "Выпечка, хлеб и готовая еда (Deli)",
         "bread, buns, baguettes, croissants, tortillas, naan, pita, cakes, pastries, crepes/pancakes, "
         "and fresh prepared Costco Service Deli / ready-to-eat chilled meals (rotisserie chicken, sushi, poke, "
         "refrigerated ravioli/pasta, prepared entrées in sauce).",
     ),
     (
-        "Бакалея, масла, специи и консервы",
         "Pantry, oils, spices & canned goods",
+        "Бакалея, масла, специи и консервы",
         "olive & cooking oils, vinegar, grains, rice, oats/granola/cereal, flour, sugar, yeast, dry pasta & "
         "instant noodle bowls, sauces, mayonnaise, marinades, spices/seasonings/rubs, honey, jams/fruit spreads, "
         "olives, sauerkraut, canned goods.",
     ),
     (
-        "Заморозка и полуфабрикаты",
         "Frozen & ready meals",
+        "Заморозка и полуфабрикаты",
         "frozen foods — dumplings/potstickers/mandu, frozen burgers/patties, frozen meatballs, frozen snacks/"
         "appetizers (flautas, spanakopita, takoyaki, pizza), frozen breaded or portioned fish/seafood "
         "(frozen Mahi-Mahi, frozen seafood mix, tortilla-crusted tilapia), frozen vegetables/berries/fruit, ice cream.",
     ),
     (
-        "Снеки, сладости, орехи и напитки",
         "Snacks, sweets, nuts & drinks",
+        "Снеки, сладости, орехи и напитки",
         "chocolate, candy, cookies, crackers, chips, nuts, trail mix, dried & freeze-dried fruit, "
         "protein/granola bars, non-alcoholic beverages (water, juice, soda, kombucha, energy drinks), "
         "and coffee (whole bean, ground, K-Cup pods) & tea.",
     ),
     (
-        "Бытовая химия, бумага и уборка",
         "Household, paper & cleaning",
+        "Бытовая химия, бумага и уборка",
         "laundry detergent, dish soap/pods, surface/oven/shoe cleaners, bath tissue/toilet paper, paper towels, "
         "facial tissues, trash bags, disposable food storage bags (Ziploc), foil, parchment.",
     ),
     (
-        "Здоровье, аптека, витамины и гигиена",
         "Health, pharmacy, vitamins & personal care",
+        "Здоровье, аптека, витамины и гигиена",
         "vitamins, supplements, OTC medications, toothpaste, mouthwash, dental floss, razors/cartridges, deodorant, "
         "feminine care (pads, liners), shampoo, conditioner, body wash, skincare/creams/lotions, toner pads, "
         "sunscreen, cosmetics, massagers.",
     ),
     (
-        "Товары для дома, кухни и сада",
         "Home, kitchen & garden",
+        "Товары для дома, кухни и сада",
         "cookware, reusable food storage containers & lunch boxes (Pyrex, Bentgo), cabinet/cosmetic organizers, "
         "storage drawers, hangers, home textiles, gift wrap & ribbon, garden planters & decorative floral "
         "arrangements, folding carts/hand trucks, multi-tools & hardware.",
     ),
     (
-        "Одежда и обувь",
         "Clothing & shoes",
+        "Одежда и обувь",
         "men's, women's, and kids' apparel, underwear, socks, swimwear, shoes, gloves, hats/beanies, "
         "sunglasses/eyewear, bags & backpacks.",
     ),
     (
-        "Электроника и техника",
         "Electronics & appliances",
+        "Электроника и техника",
         "electronics, headphones, appliances, portable fans, chargers, cables, and batteries "
         "(Duracell AA/AAA, rechargeable).",
     ),
     (
         FUEL_CATEGORY,
-        "Auto & fuel (Gas Station)",
+        "Авто и заправка (Gas Station)",
         "gasoline, diesel, motor oil, automotive supplies.",
     ),
     (
+        ALCOHOL_CATEGORY,
         "Алкоголь",
-        "Alcohol",
         "wine, prosecco, champagne, beer, spirits, sangria.",
     ),
     (
+        OTHER_CATEGORY,
         "Прочее",
-        "Other",
         "bottle deposits (`CA REDEMP VAL` / CRV), liquor liter taxes (`LIQUOR LITER TAX`), standalone store coupons/"
         "adjustments (`CPN`, `/123456`), gift cards, and items (such as toys/`LEGO` when no kids/toys category is "
         "in `Allowed categories`) that do not fit any other allowed category.",
@@ -120,11 +124,19 @@ _DEFAULT_CATEGORIES_SPEC: list[tuple[str, str, str]] = [
 ]
 
 DEFAULT_CATEGORIES: list[str] = [name for name, _, _ in _DEFAULT_CATEGORIES_SPEC]
-DEFAULT_CATEGORY_LABELS_EN: dict[str, str] = {name: en for name, en, _ in _DEFAULT_CATEGORIES_SPEC}
+DEFAULT_CATEGORY_LABELS_RU: dict[str, str] = {name: ru for name, ru, _ in _DEFAULT_CATEGORIES_SPEC}
 DEFAULT_CATEGORY_SCOPES: dict[str, str] = {name: scope for name, _, scope in _DEFAULT_CATEGORIES_SPEC}
-def merge_category_labels_en(custom_labels_en: dict[str, str] | None = None) -> dict[str, str]:
-    """Combines custom and default English category labels, with defaults taking precedence."""
-    return {**(custom_labels_en or {}), **DEFAULT_CATEGORY_LABELS_EN}
+def merge_category_labels_ru(custom_labels_ru: dict[str, str] | None = None) -> dict[str, str]:
+    """Combines custom and default Russian category labels, with defaults taking precedence."""
+    return {**(custom_labels_ru or {}), **DEFAULT_CATEGORY_LABELS_RU}
+
+
+_CYRILLIC_RE = re.compile(r"[А-Яа-яЁё]")
+
+
+def is_english_category_name(name: str) -> bool:
+    """Category names are stored and sent to Gemini in English; Russian belongs in the UI label."""
+    return bool(name.strip()) and not _CYRILLIC_RE.search(name)
 
 
 def get_gemini_api_key() -> str:

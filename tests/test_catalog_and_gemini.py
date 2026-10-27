@@ -10,14 +10,14 @@ def test_first_time_gemini_classification_and_manual_override(tmp_path: Path, mo
     db = Database(tmp_path / "test_costco.db")
     gemini_calls: list[list[dict]] = []
 
-    def fake_gemini_batch(self, batch, categories, client, custom_labels_en=None):
+    def fake_gemini_batch(self, batch, categories, client):
         gemini_calls.append(batch)
         return [
             {
                 "item_number": item["item_number"],
                 "raw_description": item["raw_description"],
                 "clean_name": f"Gemini Decoded: {item['raw_description']}",
-                "category": "Бакалея, масла, специи и консервы",
+                "category": "Pantry, oils, spices & canned goods",
             }
             for item in batch
         ]
@@ -51,7 +51,7 @@ def test_first_time_gemini_classification_and_manual_override(tmp_path: Path, mo
     # The decoded name and category are saved in the local database
     catalog_map = db.get_existing_catalog_map(["678910"])
     assert catalog_map["678910"]["clean_name"] == "Gemini Decoded: KS ORG EVOO"
-    assert catalog_map["678910"]["category"] == "Бакалея, масла, специи и консервы"
+    assert catalog_map["678910"]["category"] == "Pantry, oils, spices & canned goods"
     assert catalog_map["678910"]["classified_by"] == "gemini"
 
     # 2. Load a second receipt with the SAME Item #678910 -> Gemini must NOT be called again
@@ -73,17 +73,17 @@ def test_first_time_gemini_classification_and_manual_override(tmp_path: Path, mo
     # 3. The user manually changes the category of Item #678910
     updated_item = db.update_item_category_manual(
         item_number="678910",
-        category="Здоровье, аптека, витамины и гигиена",
+        category="Health, pharmacy, vitamins & personal care",
         clean_name="Оливковое масло Kirkland (Моё название)",
     )
     assert updated_item is not None
     assert updated_item["is_manual_override"] == 1
-    assert updated_item["category"] == "Здоровье, аптека, витамины и гигиена"
+    assert updated_item["category"] == "Health, pharmacy, vitamins & personal care"
 
     # Stats for both receipts immediately move to the new category
     stats = db.get_statistics(start_date="2026-10-01", end_date="2026-10-31")
     assert len(stats["by_category"]) == 1
-    assert stats["by_category"][0]["category"] == "Здоровье, аптека, витамины и гигиена"
+    assert stats["by_category"][0]["category"] == "Health, pharmacy, vitamins & personal care"
     assert stats["by_category"][0]["net_spent"] == 49.98
 
 
@@ -131,13 +131,13 @@ def test_gemini_unknown_item_numbers_are_ignored(tmp_path: Path):
                 "id": 0,
                 "item_number": "0123456 ",
                 "clean_name": "Olive Oil",
-                "category": "Бакалея, масла, специи и консервы",
+                "category": "Pantry, oils, spices & canned goods",
             },
             # Wrong item_number for id=0 (e.g. if Gemini skipped an item and shifted neighbors) must be rejected
-            {"id": 0, "item_number": "999999", "clean_name": "ShiftedNeighbor", "category": "Прочее"},
-            {"id": 999, "item_number": "123456", "clean_name": "OutOfRangeId", "category": "Прочее"},
-            {"id": -1, "item_number": "123456", "clean_name": "NegativeId", "category": "Прочее"},
-            {"id": True, "item_number": "123456", "clean_name": "BoolNotInt", "category": "Прочее"},
+            {"id": 0, "item_number": "999999", "clean_name": "ShiftedNeighbor", "category": "Other"},
+            {"id": 999, "item_number": "123456", "clean_name": "OutOfRangeId", "category": "Other"},
+            {"id": -1, "item_number": "123456", "clean_name": "NegativeId", "category": "Other"},
+            {"id": True, "item_number": "123456", "clean_name": "BoolNotInt", "category": "Other"},
         ]
     }
     fake_client = pytypes.SimpleNamespace(
@@ -163,21 +163,21 @@ def test_fallback_prefers_exact_names_and_specific_keywords():
         return fallback_categorize_item("1", desc)["category"]
 
     # The exact name from the electronics rule beats "APPLE" from produce
-    assert category("APPLE AIRPODS PRO 2ND GEN USB-C") == "Электроника и техника"
+    assert category("APPLE AIRPODS PRO 2ND GEN USB-C") == "Electronics & appliances"
     # A longer keyword wins: "AIRPODS" over "APPLE"
-    assert category("APPLE AIRPODS MAX") == "Электроника и техника"
+    assert category("APPLE AIRPODS MAX") == "Electronics & appliances"
     # No substring hits inside other words
-    assert category("PRICE MATCH ADJ") == "Прочее"
+    assert category("PRICE MATCH ADJ") == "Other"
     # A keyword at the end of a compound names the thing; plurals of short keywords match
-    assert category("PINEAPPLE CHUNKS") == "Овощи, фрукты и ягоды"
-    assert category("CHEESECAKE") == "Выпечка, хлеб и готовая еда (Deli)"
-    assert category("FLATBREAD") == "Выпечка, хлеб и готовая еда (Deli)"
-    assert category("FRY PANS 2PK") == "Товары для дома, кухни и сада"
-    assert category("TVORT CHEESE") == "Молочные продукты, сыр и яйца"
+    assert category("PINEAPPLE CHUNKS") == "Fruits, vegetables & berries"
+    assert category("CHEESECAKE") == "Bakery, bread & prepared food (Deli)"
+    assert category("FLATBREAD") == "Bakery, bread & prepared food (Deli)"
+    assert category("FRY PANS 2PK") == "Home, kitchen & garden"
+    assert category("TVORT CHEESE") == "Dairy, cheese & eggs"
     # Prefix keywords still work
-    assert category("ORG STRAWBERRIES 2LB") == "Овощи, фрукты и ягоды"
-    assert category("SUNSCREEN CREAM SPF50") == "Здоровье, аптека, витамины и гигиена"
-    assert category("BOUNTY PAPER TOWEL 12CT") == "Бытовая химия, бумага и уборка"
+    assert category("ORG STRAWBERRIES 2LB") == "Fruits, vegetables & berries"
+    assert category("SUNSCREEN CREAM SPF50") == "Health, pharmacy, vitamins & personal care"
+    assert category("BOUNTY PAPER TOWEL 12CT") == "Household, paper & cleaning"
 
 
 def test_fuel_keeps_parser_category_and_skips_classifier(tmp_path: Path):
@@ -197,7 +197,7 @@ def test_fuel_keeps_parser_category_and_skips_classifier(tmp_path: Path):
     assert db.get_pending_items_for_gemini() == []
     with db.connect() as conn:
         row = conn.execute("SELECT category, classified_by FROM item_catalog WHERE item_number = '800877'").fetchone()
-    assert (row["category"], row["classified_by"]) == ("Авто и заправка (Gas Station)", "parser")
+    assert (row["category"], row["classified_by"]) == ("Auto & fuel (Gas Station)", "parser")
 
 
 def test_existing_pending_fuel_and_orphan_rows_are_not_sent_to_classifier(tmp_path: Path):
@@ -214,11 +214,11 @@ def test_existing_pending_fuel_and_orphan_rows_are_not_sent_to_classifier(tmp_pa
     )
     with db.connect() as conn:
         # State left by older syncs: fuel saved as pending, and a fee row with no receipt line
-        conn.execute("UPDATE item_catalog SET category = 'Прочее', classified_by = 'pending' WHERE item_number = '800877'")
+        conn.execute("UPDATE item_catalog SET category = 'Other', classified_by = 'pending' WHERE item_number = '800877'")
         conn.execute(
             """
             INSERT INTO item_catalog (item_number, raw_description, clean_name, category, is_manual_override, classified_by, updated_at)
-            VALUES ('FEE1', 'DELIVERY FEE', 'DELIVERY FEE', 'Прочее', 0, 'pending', '2026-10-01')
+            VALUES ('FEE1', 'DELIVERY FEE', 'DELIVERY FEE', 'Other', 0, 'pending', '2026-10-01')
             """
         )
         conn.execute("PRAGMA user_version = 0")
@@ -228,7 +228,7 @@ def test_existing_pending_fuel_and_orphan_rows_are_not_sent_to_classifier(tmp_pa
     assert db.get_pending_items_for_gemini() == []
     with db.connect() as conn:
         row = conn.execute("SELECT category, classified_by FROM item_catalog WHERE item_number = '800877'").fetchone()
-    assert (row["category"], row["classified_by"]) == ("Авто и заправка (Gas Station)", "parser")
+    assert (row["category"], row["classified_by"]) == ("Auto & fuel (Gas Station)", "parser")
 
 
 def test_resync_moves_pending_row_to_parser_category(tmp_path: Path):
@@ -243,7 +243,7 @@ def test_resync_moves_pending_row_to_parser_category(tmp_path: Path):
         conn.execute(
             """
             INSERT INTO item_catalog (item_number, raw_description, clean_name, category, is_manual_override, classified_by, updated_at)
-            VALUES ('800877', 'REGULAR', 'REGULAR', 'Прочее', 0, 'fallback', '2026-10-01')
+            VALUES ('800877', 'REGULAR', 'REGULAR', 'Other', 0, 'fallback', '2026-10-01')
             """
         )
 
@@ -251,7 +251,7 @@ def test_resync_moves_pending_row_to_parser_category(tmp_path: Path):
 
     with db.connect() as conn:
         row = conn.execute("SELECT category, classified_by FROM item_catalog WHERE item_number = '800877'").fetchone()
-    assert (row["category"], row["classified_by"]) == ("Авто и заправка (Gas Station)", "parser")
+    assert (row["category"], row["classified_by"]) == ("Auto & fuel (Gas Station)", "parser")
 
 
 def test_gemini_item_numbers_differing_by_leading_zeros_and_duplicate_ids(tmp_path: Path):
@@ -262,9 +262,9 @@ def test_gemini_item_numbers_differing_by_leading_zeros_and_duplicate_ids(tmp_pa
     answer = {
         "items": [
             # Swapped item_number ('123' at id=0 where '0123' is expected) is rejected because '123' is in the batch
-            {"id": 0, "item_number": "123", "clean_name": "Swapped", "category": "Прочее"},
-            {"id": 1, "item_number": "123", "clean_name": "First Draft", "category": "Прочее"},
-            {"id": "", "item_number": "123", "clean_name": "Empty", "category": "Прочее"},
+            {"id": 0, "item_number": "123", "clean_name": "Swapped", "category": "Other"},
+            {"id": 1, "item_number": "123", "clean_name": "First Draft", "category": "Other"},
+            {"id": "", "item_number": "123", "clean_name": "Empty", "category": "Other"},
             # Duplicate answer for id=1 keeps the last answer, and preserves category with trailing space
             {"id": 1, "item_number": "123", "clean_name": "Exact", "category": "Категория с пробелом "},
         ]
@@ -306,7 +306,7 @@ def test_migration_unlocks_groceries_an_old_parser_took_for_fuel(tmp_path: Path)
         # What the old parser and the old startup migration left behind
         conn.execute("UPDATE receipts SET receipt_type = 'gas' WHERE transaction_barcode = 'R-OLD-GAS'")
         conn.execute(
-            "UPDATE item_catalog SET category = 'Авто и заправка (Gas Station)', clean_name = 'Топливо Costco (x)', "
+            "UPDATE item_catalog SET category = 'Auto & fuel (Gas Station)', clean_name = 'Топливо Costco (x)', "
             "classified_by = 'parser'"
         )
         conn.execute("PRAGMA user_version = 0")
@@ -318,7 +318,7 @@ def test_migration_unlocks_groceries_an_old_parser_took_for_fuel(tmp_path: Path)
         rows = conn.execute("SELECT category, classified_by FROM item_catalog").fetchall()
         version = conn.execute("PRAGMA user_version").fetchone()[0]
     assert receipt_type == "warehouse"
-    assert {(r["category"], r["classified_by"]) for r in rows} == {("Прочее", "pending")}
+    assert {(r["category"], r["classified_by"]) for r in rows} == {("Other", "pending")}
     assert {i["item_number"] for i in db.get_pending_items_for_gemini()} == {"1000001", "1000002"}
     assert version == ENGLISH_NAMES_SCHEMA_VERSION
 
@@ -327,7 +327,7 @@ def test_unmatched_coupon_does_not_overwrite_product_with_same_number(tmp_path: 
     db = Database(tmp_path / "test_costco.db")
     db.save_categorized_items(
         [{"item_number": "1234567", "raw_description": "KS EVOO", "clean_name": "Olive Oil",
-          "category": "Бакалея, масла, специи и консервы"}]
+          "category": "Pantry, oils, spices & canned goods"}]
     )
 
     db.upsert_receipts(
@@ -347,7 +347,7 @@ def test_unmatched_coupon_does_not_overwrite_product_with_same_number(tmp_path: 
     with db.connect() as conn:
         row = conn.execute("SELECT clean_name, category FROM item_catalog WHERE item_number = '1234567'").fetchone()
         coupon = conn.execute("SELECT classified_by FROM item_catalog WHERE item_number = 'DISCOUNT-222'").fetchone()
-    assert (row["clean_name"], row["category"]) == ("Olive Oil", "Бакалея, масла, специи и консервы")
+    assert (row["clean_name"], row["category"]) == ("Olive Oil", "Pantry, oils, spices & canned goods")
     assert coupon["classified_by"] == "parser"
 
 
@@ -363,7 +363,7 @@ def test_migration_translates_generated_names_to_english(tmp_path: Path):
             conn.execute(
                 """
                 INSERT INTO item_catalog (item_number, raw_description, clean_name, category, is_manual_override, classified_by, updated_at)
-                VALUES (?, ?, ?, 'Прочее', ?, ?, '2026-10-01')
+                VALUES (?, ?, ?, 'Other', ?, ?, '2026-10-01')
                 """,
                 (item_number, raw, name, int(by == "manual"), by),
             )
@@ -381,16 +381,16 @@ def test_migration_translates_generated_names_to_english(tmp_path: Path):
     }
 
 
-def test_custom_category_english_name_can_be_added_later(tmp_path: Path):
+def test_custom_category_russian_label_can_be_added_later(tmp_path: Path):
     db = Database(tmp_path / "test_costco.db")
-    db.add_custom_category("Питомцы")
-    assert db.get_category_labels_en() == {}
+    db.add_custom_category("Pets")
+    assert db.get_category_labels_ru() == {}
 
-    db.add_custom_category("Питомцы", "Pets")
-    db.add_custom_category("Питомцы")  # an empty English name keeps the existing one
+    db.add_custom_category("Pets", "Питомцы")
+    db.add_custom_category("Pets")  # an empty Russian label keeps the existing one
 
-    assert db.get_category_labels_en() == {"Питомцы": "Pets"}
-    assert db.get_all_categories().count("Питомцы") == 1
+    assert db.get_category_labels_ru() == {"Pets": "Питомцы"}
+    assert db.get_all_categories().count("Pets") == 1
 
 
 def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path):
@@ -408,7 +408,7 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path):
     )
 
     db = Database(tmp_path / "test_costco.db")
-    db.add_custom_category("Питомцы", "Pets")
+    db.add_custom_category("Pets", "Питомцы")
     captured: dict = {}
 
     def gen(**kw):
@@ -421,13 +421,13 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path):
                             "id": 0,
                             "item_number": "7989311562",
                             "clean_name": "O Organics Broth (32 fl oz)",
-                            "category": "Бакалея, масла, специи и консервы",
+                            "category": "Pantry, oils, spices & canned goods",
                         },
                         {
                             "id": 1,
                             "item_number": "9001",
                             "clean_name": "Kirkland Dog Treats (5 lb)",
-                            "category": "Питомцы",
+                            "category": "Pets",
                         },
                         {
                             "id": 2,
@@ -457,15 +457,12 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path):
     assert not re.search(r"[А-Яа-яЁё]", SYSTEM_INSTRUCTION)
     assert not re.search(r"[А-Яа-яЁё]", json.dumps(CategorizedItemSchema.model_json_schema(), ensure_ascii=False))
 
-    # A label on a default category (stored before such labels were rejected) must not override the default
-    custom_labels_en = {**db.get_category_labels_en(), "Прочее": "Misc"}
-    prompt = _build_classification_prompt(batch, categories, custom_labels_en)
+    # The per-batch prompt is English-only too: categories go by their English names, Russian labels stay out
+    prompt = _build_classification_prompt(batch, categories)
     for cat in categories:
         assert cat in prompt
     assert '"id":0' in prompt and '"id":1' in prompt and '"id":2' in prompt
-    assert '"english_label":"Pets"' in prompt
-    assert '"english_label":"Other"' in prompt
-    assert '"english_label":"Misc"' not in prompt
+    assert not re.search(r"[А-Яа-яЁё]", prompt)
 
     # Dynamic schema is cached, restricts category to an enum of allowed categories, and keeps its description
     schema_cls = _build_batch_schema(tuple(categories))
@@ -477,7 +474,7 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path):
     assert genai_cat.enum == categories
     assert genai_cat.description == CategorizedItemSchema.model_fields["category"].description
 
-    results = GeminiItemClassifier(db)._call_gemini_batch(batch, categories, fake_client, custom_labels_en)
+    results = GeminiItemClassifier(db)._call_gemini_batch(batch, categories, fake_client)
     assert captured["config"].system_instruction == SYSTEM_INSTRUCTION
     assert "SWY-7989311562" in captured["contents"]
     assert results == [
@@ -485,19 +482,19 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path):
             "item_number": "SWY-7989311562",
             "raw_description": "O ORGNC BROTH 32OZ",
             "clean_name": "O Organics Broth (32 fl oz)",
-            "category": "Бакалея, масла, специи и консервы",
+            "category": "Pantry, oils, spices & canned goods",
         },
         {
             "item_number": "9001",
             "raw_description": "KS DOG TREATS 5LB",
             "clean_name": "Kirkland Dog Treats (5 lb)",
-            "category": "Питомцы",
+            "category": "Pets",
         },
         {
             "item_number": "9002",
             "raw_description": "MYSTERY",
             "clean_name": "Mystery Item",
-            "category": "Прочее",
+            "category": "Other",
         },
     ]
 
@@ -532,13 +529,13 @@ def test_safeway_and_costco_same_digits_never_overwrite_each_other(tmp_path: Pat
                     "id": 0,
                     "item_number": "01234",
                     "clean_name": "Kirkland Olive Oil",
-                    "category": "Бакалея, масла, специи и консервы",
+                    "category": "Pantry, oils, spices & canned goods",
                 },
                 {
                     "id": 1,
                     "item_number": "swy-01234",
                     "clean_name": "O Organics Milk",
-                    "category": "Молочные продукты, сыр и яйца",
+                    "category": "Dairy, cheese & eggs",
                 },
             ]
         ),
@@ -558,7 +555,7 @@ def test_safeway_and_costco_same_digits_never_overwrite_each_other(tmp_path: Pat
                     "id": 0,
                     "item_number": "1234",
                     "clean_name": "Kirkland Olive Oil",
-                    "category": "Бакалея, масла, специи и консервы",
+                    "category": "Pantry, oils, spices & canned goods",
                 }
             ]
         ),
@@ -571,15 +568,15 @@ def test_safeway_and_costco_same_digits_never_overwrite_each_other(tmp_path: Pat
         categories,
         make_client(
             [
-                {"id": 0, "item_number": "SWY-1234", "clean_name": "Wrong", "category": "Прочее"},
-                {"id": 1, "item_number": "1234", "clean_name": "Ambiguous", "category": "Прочее"},
+                {"id": 0, "item_number": "SWY-1234", "clean_name": "Wrong", "category": "Other"},
+                {"id": 1, "item_number": "1234", "clean_name": "Ambiguous", "category": "Other"},
             ]
         ),
     )
     assert res_swapped == []
 
 
-def test_classify_new_items_reuses_client_and_falls_back_on_label_error(tmp_path: Path, monkeypatch):
+def test_classify_new_items_reuses_client_and_skips_non_english_categories(tmp_path: Path, monkeypatch, caplog):
     import json
     import types as pytypes
 
@@ -605,7 +602,7 @@ def test_classify_new_items_reuses_client_and_falls_back_on_label_error(tmp_path
                                     "id": p["id"],
                                     "item_number": p["item_number"],
                                     "clean_name": "Decoded",
-                                    "category": "Прочее",
+                                    "category": "Other",
                                 }
                                 for p in payload
                             ]
@@ -626,24 +623,28 @@ def test_classify_new_items_reuses_client_and_falls_back_on_label_error(tmp_path
     assert res == {"classified_count": 2, "provider": "gemini"}
     assert client_creations == 1
 
-    # If label lookup fails on a busy DB, classify_new_items falls back instead of raising
-    def boom():
-        raise RuntimeError("database is locked")
-
-    monkeypatch.setattr(db, "get_category_labels_en", boom)
-    res_fb = classifier.classify_new_items([{"item_number": "103", "raw_description": "KS ORG EVOO"}])
-    assert res_fb["classified_count"] == 1
-    assert db.get_existing_catalog_map(["103"])["103"]["classified_by"] == "fallback"
+    # A custom category left without an English name by an old database is not sent to Gemini
+    with db.connect() as conn:
+        conn.execute("INSERT INTO custom_categories (name, name_ru, created_at) VALUES ('Подарки', '', '2026-10-01')")
+    sent: list[list[str]] = []
+    monkeypatch.setattr(
+        GeminiItemClassifier,
+        "_call_gemini_batch",
+        lambda self, batch, categories, client: sent.append(categories) or [],
+    )
+    classifier.classify_new_items([{"item_number": "103", "raw_description": "KS ORG EVOO"}])
+    assert sent and "Подарки" not in sent[0] and "Other" in sent[0]
+    assert "Подарки" in caplog.text
 
 
 def test_config_api_serves_category_labels_and_reserves_default_names(tmp_path: Path):
     from fastapi.testclient import TestClient
 
     from app.api.routes import get_db
-    from app.config import DEFAULT_CATEGORIES, DEFAULT_CATEGORY_LABELS_EN
+    from app.config import DEFAULT_CATEGORIES, DEFAULT_CATEGORY_LABELS_RU
     from app.main import app
 
-    assert list(DEFAULT_CATEGORY_LABELS_EN) == DEFAULT_CATEGORIES
+    assert list(DEFAULT_CATEGORY_LABELS_RU) == DEFAULT_CATEGORIES
 
     test_db = Database(tmp_path / "config_labels.db")
     app.dependency_overrides[get_db] = lambda: test_db
@@ -651,30 +652,36 @@ def test_config_api_serves_category_labels_and_reserves_default_names(tmp_path: 
         client = TestClient(app)
         res = client.get("/api/config")
         assert res.status_code == 200
-        assert res.json()["category_labels_en"] == DEFAULT_CATEGORY_LABELS_EN
+        assert res.json()["categories"][: len(DEFAULT_CATEGORIES)] == DEFAULT_CATEGORIES
+        assert res.json()["category_labels_ru"] == DEFAULT_CATEGORY_LABELS_RU
 
-        res_custom = client.post("/api/categories", json={"name": "Питомцы", "name_en": "Pets"})
+        res_custom = client.post("/api/categories", json={"name": "Pets", "name_ru": "Питомцы"})
         assert res_custom.status_code == 200
-        assert res_custom.json()["category_labels_en"]["Питомцы"] == "Pets"
+        assert res_custom.json()["category_labels_ru"]["Pets"] == "Питомцы"
 
-        # Default names and their English labels can't be reused: the label would be ignored,
-        # or a custom "Other" would compete with "Прочее" in the Gemini prompt
+        # Default names and their Russian labels can't be reused: the label would be ignored,
+        # or a custom "other" would compete with "Other" in the Gemini prompt
         for payload in (
-            {"name": "Прочее", "name_en": "Misc"},
+            {"name": "Other", "name_ru": "Разное"},
             {"name": "other"},
-            {"name": "Вино", "name_en": "Alcohol"},
+            {"name": "Wine", "name_ru": "Алкоголь"},
         ):
             res = client.post("/api/categories", json=payload)
             assert res.status_code == 400, payload
             assert res.json()["detail"]["code"] == "category_reserved"
-        labels = client.get("/api/config").json()["category_labels_en"]
-        assert labels["Прочее"] == "Other"
-        assert "Вино" not in labels
+        labels = client.get("/api/config").json()["category_labels_ru"]
+        assert labels["Other"] == "Прочее"
+        assert "Wine" not in labels
+
+        # The name goes to Gemini, so it must be English; Russian belongs in name_ru
+        res = client.post("/api/categories", json={"name": "Подарки"})
+        assert res.status_code == 400
+        assert res.json()["detail"]["code"] == "category_not_english"
 
         # Re-entering a custom category to change its translation is allowed,
-        # but another category can't take its English label or name
-        assert client.post("/api/categories", json={"name": "Питомцы", "name_en": "Pet supplies"}).status_code == 200
-        for payload in ({"name": "Зоотовары", "name_en": "pet supplies"}, {"name": "Pet Supplies"}):
+        # but another category can't take its Russian label or name
+        assert client.post("/api/categories", json={"name": "Pets", "name_ru": "Зоотовары"}).status_code == 200
+        for payload in ({"name": "Pet food", "name_ru": "зоотовары"}, {"name": "PETS food", "name_ru": "Pets"}):
             res = client.post("/api/categories", json=payload)
             assert res.status_code == 400, payload
             assert res.json()["detail"]["code"] == "category_reserved"
@@ -695,13 +702,13 @@ def test_gemini_request_and_response_logged_at_debug(tmp_path: Path, caplog):
     import types as pytypes
 
     db = Database(tmp_path / "test_costco.db")
-    answer = {"items": [{"id": 0, "item_number": "1234", "clean_name": "Kirkland Olive Oil", "category": "Прочее"}]}
+    answer = {"items": [{"id": 0, "item_number": "1234", "clean_name": "Kirkland Olive Oil", "category": "Other"}]}
     usage = pytypes.SimpleNamespace(prompt_token_count=120, candidates_token_count=30)
     batch = [{"item_number": "1234", "raw_description": "KS ORG EVOO", "sample_unit_price": 9.99}]
 
     with caplog.at_level(logging.DEBUG, logger="app.categorizer.gemini_classifier"):
         GeminiItemClassifier(db)._call_gemini_batch(
-            batch, db.get_all_categories(), _fake_gemini_client(answer, usage), {}
+            batch, db.get_all_categories(), _fake_gemini_client(answer, usage)
         )
 
     assert "KS ORG EVOO" in caplog.text
@@ -718,8 +725,8 @@ def test_items_dropped_from_gemini_response_get_fallback(tmp_path: Path, monkeyp
     # Gemini answers item 0 correctly and returns a wrong item_number for item 1
     answer = {
         "items": [
-            {"id": 0, "item_number": "1001", "clean_name": "Kirkland Olive Oil", "category": "Прочее"},
-            {"id": 1, "item_number": "9999", "clean_name": "Wrong Item", "category": "Прочее"},
+            {"id": 0, "item_number": "1001", "clean_name": "Kirkland Olive Oil", "category": "Other"},
+            {"id": 1, "item_number": "9999", "clean_name": "Wrong Item", "category": "Other"},
         ]
     }
     saved: list[tuple[list[str], str]] = []
@@ -758,32 +765,57 @@ def test_gemini_setup_failure_falls_back_once(tmp_path: Path, monkeypatch):
     assert result["provider"] == "fallback"
 
 
-def test_startup_merges_custom_categories_clashing_with_defaults(tmp_path: Path):
+def _legacy_russian_db(db_path: Path) -> None:
+    """A database from before English category names: custom_categories(name, name_en), Russian defaults."""
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE custom_categories (name TEXT PRIMARY KEY, created_at TEXT NOT NULL, name_en TEXT NOT NULL DEFAULT '');
+        CREATE TABLE item_catalog (
+            item_number TEXT PRIMARY KEY, raw_description TEXT NOT NULL, clean_name TEXT NOT NULL,
+            category TEXT NOT NULL, is_manual_override INTEGER NOT NULL DEFAULT 0,
+            classified_by TEXT NOT NULL DEFAULT 'pending', updated_at TEXT NOT NULL
+        );
+        INSERT INTO custom_categories VALUES
+            ('Детские товары', '2026-10-01', 'Kids'), ('Подарки', '2026-10-01', ''),
+            ('прочее', '2026-10-01', ''), ('Вино', '2026-10-01', 'Alcohol'), (' ', '2026-10-01', '');
+        INSERT INTO item_catalog VALUES
+            ('1', 'LEGO', 'LEGO', 'Детские товары', 1, 'manual', '2026-10-01'),
+            ('2', 'EVOO', 'Olive Oil', 'Бакалея, масла, специи и консервы', 0, 'gemini', '2026-10-01'),
+            ('3', 'CPN', 'Coupon', 'Прочее', 0, 'parser', '2026-10-01'),
+            ('4', 'X', 'X', 'прочее', 1, 'manual', '2026-10-01'),
+            ('5', 'MERLOT', 'Merlot', 'Вино', 1, 'manual', '2026-10-01'),
+            ('6', 'Y', 'Y', ' ', 1, 'manual', '2026-10-01');
+        PRAGMA user_version = 2;
+        """
+    )
+    conn.close()
+
+
+def test_startup_migrates_russian_categories_to_english(tmp_path: Path):
     db_path = tmp_path / "test_costco.db"
-    db = Database(db_path)
-    # Rows saved before names were checked, written directly to skip add_custom_category
-    with db.connect() as conn:
-        conn.executemany(
-            "INSERT INTO custom_categories (name, name_en, created_at) VALUES (?, ?, '2026-10-01')",
-            [("Other", ""), ("Вино", "Alcohol"), ("Прочее", "Misc"), (" ", ""), ("Питомцы", "Pets")],
-        )
-        conn.executemany(
-            """
-            INSERT INTO item_catalog (item_number, raw_description, clean_name, category, is_manual_override, classified_by, updated_at)
-            VALUES (?, ?, ?, ?, 1, 'manual', '2026-10-01')
-            """,
-            [("1", "LEGO", "LEGO", "Other"), ("2", "WINE", "Wine", "Вино"), ("3", "X", "X", " ")],
-        )
+    _legacy_russian_db(db_path)
 
     db = Database(db_path)
+    Database(db_path)  # the migration runs on every start and changes nothing the second time
 
-    categories = db.get_all_categories()
-    assert "Other" not in categories and " " not in categories
-    assert "Вино" in categories and "Питомцы" in categories
-    assert db.get_category_labels_en() == {"Питомцы": "Pets"}
     with db.connect() as conn:
         rows = dict(conn.execute("SELECT item_number, category FROM item_catalog").fetchall())
-    assert rows == {"1": "Прочее", "2": "Вино", "3": "Прочее"}
+    assert rows == {
+        "1": "Kids",
+        "2": "Pantry, oils, spices & canned goods",
+        "3": "Other",
+        "4": "Other",
+        # "Вино" had the English name "Alcohol": it is renamed to it, which merges it into the default
+        "5": "Alcohol",
+        "6": "Other",
+    }
+    categories = db.get_all_categories()
+    assert "Kids" in categories and "Подарки" in categories
+    assert not {"Детские товары", "прочее", "Вино", "Прочее", " "} & set(categories)
+    assert db.get_category_labels_ru() == {"Kids": "Детские товары"}
 
 
 def test_blank_category_names_are_rejected(tmp_path: Path):
@@ -796,7 +828,7 @@ def test_blank_category_names_are_rejected(tmp_path: Path):
         conn.execute(
             """
             INSERT INTO item_catalog (item_number, raw_description, clean_name, category, is_manual_override, classified_by, updated_at)
-            VALUES ('5555', 'DOG FOOD', 'Dog Food', 'Прочее', 0, 'fallback', '2026-10-01')
+            VALUES ('5555', 'DOG FOOD', 'Dog Food', 'Other', 0, 'fallback', '2026-10-01')
             """
         )
     for call in (lambda: db.add_custom_category("   "), lambda: db.update_item_category_manual("5555", "  ")):
@@ -810,12 +842,12 @@ def test_duplicate_gemini_ids_are_logged(tmp_path: Path, caplog):
     db = Database(tmp_path / "test_costco.db")
     answer = {
         "items": [
-            {"id": 0, "item_number": "1234", "clean_name": "First", "category": "Прочее"},
-            {"id": 0, "item_number": "1234", "clean_name": "Second", "category": "Алкоголь"},
+            {"id": 0, "item_number": "1234", "clean_name": "First", "category": "Other"},
+            {"id": 0, "item_number": "1234", "clean_name": "Second", "category": "Alcohol"},
         ]
     }
     batch = [{"item_number": "1234", "raw_description": "KS ORG EVOO"}]
-    results = GeminiItemClassifier(db)._call_gemini_batch(batch, db.get_all_categories(), _fake_gemini_client(answer), {})
+    results = GeminiItemClassifier(db)._call_gemini_batch(batch, db.get_all_categories(), _fake_gemini_client(answer))
     assert [r["clean_name"] for r in results] == ["Second"]
     assert "id=0" in caplog.text
 
@@ -826,48 +858,53 @@ def test_category_names_are_checked_in_database(tmp_path: Path):
     from app.errors import AppError
 
     db = Database(tmp_path / "test_costco.db")
-    db.add_custom_category("Питомцы", "Pets")
+    db.add_custom_category("Pets", "Питомцы")
 
     # Re-entering in another letter case updates the existing category instead of failing or duplicating it
-    categories = db.add_custom_category("питомцы", "Pet supplies")
-    assert "питомцы" not in categories
-    assert db.get_category_labels_en()["Питомцы"] == "Pet supplies"
+    categories = db.add_custom_category("pets", "Зоотовары")
+    assert "pets" not in categories
+    assert db.get_category_labels_ru()["Pets"] == "Зоотовары"
 
-    for name, name_en in (("Other", ""), ("Прочее", "Misc"), ("Pet Supplies", ""), ("Зоотовары", "PET SUPPLIES")):
+    for name, name_ru in (("Other", ""), ("Прочее", ""), ("Pet food", "ЗООТОВАРЫ"), ("Wine", "Алкоголь")):
         with pytest.raises(AppError) as exc_info:
-            db.add_custom_category(name, name_en)
-        assert exc_info.value.code == "category_reserved"
+            db.add_custom_category(name, name_ru)
+        assert exc_info.value.code == "category_reserved", name
+    with pytest.raises(AppError) as exc_info:
+        db.add_custom_category("Подарки", "Подарки")
+    assert exc_info.value.code == "category_not_english"
 
 
 def test_manual_category_edit_reuses_existing_category(tmp_path: Path):
     db = Database(tmp_path / "test_costco.db")
-    db.add_custom_category("Питомцы", "Pets")
+    db.add_custom_category("Pets", "Питомцы")
     with db.connect() as conn:
         conn.execute(
             """
             INSERT INTO item_catalog (item_number, raw_description, clean_name, category, is_manual_override, classified_by, updated_at)
-            VALUES ('5555', 'DOG FOOD', 'Dog Food', 'Прочее', 0, 'fallback', '2026-10-01')
+            VALUES ('5555', 'DOG FOOD', 'Dog Food', 'Other', 0, 'fallback', '2026-10-01')
             """
         )
 
-    assert db.update_item_category_manual("5555", "other")["category"] == "Прочее"
-    assert db.update_item_category_manual("5555", "PETS")["category"] == "Питомцы"
+    # Typed names and Russian labels map to the stored English category
+    assert db.update_item_category_manual("5555", "прочее")["category"] == "Other"
+    assert db.update_item_category_manual("5555", "питомцы")["category"] == "Pets"
+    assert db.update_item_category_manual("5555", "PETS")["category"] == "Pets"
     categories = db.get_all_categories()
-    assert "other" not in categories and "PETS" not in categories
+    assert "прочее" not in categories and "PETS" not in categories
 
 
 def test_duplicate_id_warning_skips_rejected_answers(tmp_path: Path, caplog):
     db = Database(tmp_path / "test_costco.db")
     answer = {
         "items": [
-            {"id": 0, "item_number": "1234", "clean_name": "Right", "category": "Прочее"},
-            {"id": 0, "item_number": "5678", "clean_name": "Wrong", "category": "Прочее"},
+            {"id": 0, "item_number": "1234", "clean_name": "Right", "category": "Other"},
+            {"id": 0, "item_number": "5678", "clean_name": "Wrong", "category": "Other"},
         ]
     }
     batch = [
         {"item_number": "1234", "raw_description": "A"},
         {"item_number": "5678", "raw_description": "B"},
     ]
-    results = GeminiItemClassifier(db)._call_gemini_batch(batch, db.get_all_categories(), _fake_gemini_client(answer), {})
+    results = GeminiItemClassifier(db)._call_gemini_batch(batch, db.get_all_categories(), _fake_gemini_client(answer))
     assert [r["clean_name"] for r in results] == ["Right"]
     assert "повторный" not in caplog.text

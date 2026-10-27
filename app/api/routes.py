@@ -11,7 +11,7 @@ from app.categorizer.gemini_classifier import GeminiItemClassifier
 from app.config import (
     get_gemini_api_key,
     get_gemini_model,
-    merge_category_labels_en,
+    merge_category_labels_ru,
     save_gemini_api_key,
 )
 from app.database import Database
@@ -57,7 +57,7 @@ class UpdateItemCategoryRequest(BaseModel):
 
 class AddCategoryRequest(BaseModel):
     name: str = Field(..., min_length=1)
-    name_en: str = ""
+    name_ru: str = ""
 
 
 class SetGeminiKeyRequest(BaseModel):
@@ -74,7 +74,7 @@ def get_app_config(db: Database = Depends(get_db)) -> dict[str, Any]:
         "has_gemini_key": has_key,
         "gemini_model": get_gemini_model(),
         "categories": db.get_all_categories(),
-        "category_labels_en": merge_category_labels_en(db.get_category_labels_en()),
+        "category_labels_ru": merge_category_labels_ru(db.get_category_labels_ru()),
         "pending_gemini_items_count": len(pending),
     }
 
@@ -101,14 +101,14 @@ def create_custom_category(
     payload: AddCategoryRequest,
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
-    """Adds a new user-defined category (or sets the English name of an existing custom one)."""
+    """Adds a new user-defined category (or sets the Russian label of an existing custom one)."""
     try:
-        categories = db.add_custom_category(payload.name, payload.name_en)
+        categories = db.add_custom_category(payload.name, payload.name_ru)
     except AppError as exc:
         raise HTTPException(status_code=400, detail=exc.to_detail()) from exc
     return {
         "categories": categories,
-        "category_labels_en": merge_category_labels_en(db.get_category_labels_en()),
+        "category_labels_ru": merge_category_labels_ru(db.get_category_labels_ru()),
     }
 
 
