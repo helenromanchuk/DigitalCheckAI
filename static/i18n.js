@@ -46,6 +46,8 @@ const I18N = {
     "col.taxCrv": "Налог/CRV",
     "col.total": "Итого",
     "col.totalTitle": "Чистая сумма плюс налог и CRV",
+    "total.taxNotSplit": "Налог этого чека не удалось разнести по товарам",
+    "total.taxPartial": "Без налога части покупок: в их чеках налог нельзя разнести по товарам",
     "col.categoryEditable": "Категория (можно изменить)",
     "col.source": "Источник",
 
@@ -258,6 +260,8 @@ const I18N = {
     "col.taxCrv": "Tax/CRV",
     "col.total": "Total",
     "col.totalTitle": "Net amount plus tax and CRV",
+    "total.taxNotSplit": "This receipt's tax couldn't be split across its items",
+    "total.taxPartial": "Leaves out tax on some purchases: their receipts' tax can't be split across items",
     "col.categoryEditable": "Category (editable)",
     "col.source": "Source",
 

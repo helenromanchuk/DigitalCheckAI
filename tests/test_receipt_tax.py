@@ -196,3 +196,41 @@ def test_upgrade_reparses_so_pending_crv_rows_leave_the_gemini_queue(tmp_path):
     assert "1254" not in [i["item_number"] for i in db.get_pending_items_for_gemini()]
     with sqlite3.connect(path) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == CRV_SCHEMA_VERSION
+
+
+def test_unsplit_tax_is_flagged_on_the_receipt_and_the_item_total(tmp_path):
+    from app.database import Database
+    from app.scraper.parser import parse_any_costco_payload
+
+    def receipt(barcode, date, tax, flag):
+        return {
+            "transactionBarcode": barcode,
+            "transactionDate": date,
+            "receiptType": "In-Warehouse",
+            "warehouseName": "SAN JOSE #148",
+            "taxes": tax,
+            "itemArray": [{"itemNumber": "777", "itemDescription01": "SOAP", "unit": 1, "amount": 10.0, "taxFlag": flag}],
+        }
+
+    db = Database(tmp_path / "unsplit.db")
+    db.init_db()
+    db.upsert_receipts(
+        parse_any_costco_payload([receipt("1001", "2026-06-01", 1.0, "Y"), receipt("1002", "2026-06-02", 1.0, "")])
+    )
+
+    by_barcode = {r["transaction_barcode"]: r["items"][0] for r in db.get_receipts_list()}
+    assert by_barcode["1001"]["tax_unsplit"] is False
+    assert by_barcode["1002"]["tax_unsplit"] is True
+    (soap,) = db.get_items_summary()
+    assert soap["tax_amount"] == 1.0
+    assert soap["tax_partial"] is True
+
+
+def test_normalized_crv_line_gets_the_parser_category():
+    from app.scraper.parser import CRV_NAME, parse_warehouse_or_gas_receipt
+
+    line = {"item_number": "1254", "raw_description": "CA REDEMP VAL T EI/919140", "gross_amount": 0.1, "net_amount": 0.1}
+    parsed = parse_warehouse_or_gas_receipt(
+        {"transactionBarcode": "1003", "transactionDate": "2026-06-03", "receiptType": "In-Warehouse", "items": [line]}
+    )
+    assert parsed["items"][0]["default_clean_name"] == CRV_NAME

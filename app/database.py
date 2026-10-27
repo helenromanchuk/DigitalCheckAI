@@ -19,7 +19,7 @@ from app.config import (
     merge_category_labels_ru,
 )
 from app.errors import AppError
-from app.receipt_tax import add_tax_and_crv, crv_owners
+from app.receipt_tax import add_tax_and_crv, crv_owners, empty_tax_crv
 from app.unit_price import add_unit_prices
 
 # PRAGMA user_version after each one-time data migration (see init_db)
@@ -909,7 +909,7 @@ class Database:
         result = []
         for r in rows:
             item = add_unit_prices(dict(r), "net_spent", "total_quantity")
-            item.update(tax_crv.get(item["item_number"], {"tax_amount": None, "crv_amount": 0.0, "tax_crv": 0.0}))
+            item.update(tax_crv.get(item["item_number"]) or empty_tax_crv())
             result.append(item)
         return result
 
@@ -941,11 +941,13 @@ class Database:
         for _, group in groupby(rows, key=lambda row: row["transaction_barcode"]):
             lines = [dict(row) for row in group]
             for line in add_tax_and_crv(lines, lines[0]["tax"]):
-                total = totals.setdefault(line["item_number"], {"tax_amount": None, "crv_amount": 0.0, "tax_crv": 0.0})
+                total = totals.setdefault(line["item_number"], empty_tax_crv())
                 if line["tax_amount"] is not None:
                     total["tax_amount"] = round((total["tax_amount"] or 0.0) + line["tax_amount"], 2)
                 total["crv_amount"] = round(total["crv_amount"] + line["crv_amount"], 2)
                 total["tax_crv"] = round(total["tax_crv"] + line["tax_crv"], 2)
+                # Some purchase's tax couldn't be split, so the item's total with tax is incomplete
+                total["tax_partial"] = total["tax_partial"] or line["tax_unsplit"]
         return totals
 
     def search_purchases(self, query: str, limit: int = 500) -> list[dict[str, Any]]:

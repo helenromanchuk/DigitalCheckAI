@@ -640,7 +640,7 @@ function renderItemsTable(data) {
       <td class="px-3 py-2.5 text-right text-emerald-600">${item.discount_saved > 0 ? "-" + formatMoney(item.discount_saved) : "—"}</td>
       <td class="px-3 py-2.5 text-right font-bold text-slate-900">${formatMoney(item.net_spent)}</td>
       <td class="px-3 py-2.5 text-right text-slate-500" title="${escapeHtml(taxCrvTitle(item))}">${item.tax_amount != null || item.crv_amount ? formatMoney(item.tax_crv) : "—"}</td>
-      <td class="px-3 py-2.5 text-right font-bold text-slate-900">${formatMoney(item.net_spent + item.tax_crv)}</td>
+      <td class="px-3 py-2.5 text-right font-bold text-slate-900" title="${item.tax_partial ? escapeHtml(t("total.taxPartial")) : ""}">${formatMoney(item.net_spent + item.tax_crv)}${item.tax_partial ? "*" : ""}</td>
       <td class="px-3 py-2.5 text-right text-slate-700">${formatUnitPrice(item.price_per_lb)}</td>
       <td class="px-3 py-2.5 text-right text-slate-700">${formatUnitPrice(item.price_per_oz)}</td>
       <td class="px-3 py-2.5">
@@ -731,7 +731,7 @@ function renderReceiptsList(data) {
         <td class="py-1.5 px-2 text-right text-emerald-600">${item.discount_amount > 0 ? "-" + formatMoney(item.discount_amount) : "—"}</td>
         <td class="py-1.5 px-2 text-right font-semibold text-slate-900">${formatMoney(item.net_amount)}</td>
         <td class="py-1.5 px-2 text-right text-slate-500" title="${escapeHtml(taxCrvTitle(item))}">${item.tax_amount != null || item.crv_amount ? formatMoney(item.tax_crv) : "—"}</td>
-        <td class="py-1.5 px-2 text-right font-semibold text-slate-900">${formatMoney(item.net_amount + item.tax_crv)}</td>
+        <td class="py-1.5 px-2 text-right font-semibold text-slate-900" title="${item.tax_unsplit ? escapeHtml(t("total.taxNotSplit")) : ""}">${item.tax_unsplit ? "—" : formatMoney(item.net_amount + item.tax_crv)}</td>
         <td class="py-1.5 px-2 text-right text-slate-600">${formatUnitPrice(item.price_per_lb)}</td>
         <td class="py-1.5 px-2 text-right text-slate-600">${formatUnitPrice(item.price_per_oz)}</td>
       </tr>

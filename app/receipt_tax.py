@@ -47,6 +47,11 @@ def crv_owners(items: list[dict[str, Any]]) -> dict[int, int]:
     return owners
 
 
+def empty_tax_crv() -> dict[str, Any]:
+    """Tax and CRV totals of an item with no purchases to add up."""
+    return {"tax_amount": None, "crv_amount": 0.0, "tax_crv": 0.0, "tax_partial": False}
+
+
 def add_tax_and_crv(items: list[dict[str, Any]], receipt_tax: float) -> list[dict[str, Any]]:
     """Returns the items with tax_amount, crv_amount and tax_crv; CRV lines are folded into the item they belong to.
 
@@ -54,7 +59,8 @@ def add_tax_and_crv(items: list[dict[str, Any]], receipt_tax: float) -> list[dic
     from crv_owners). Costco gives only the receipt's total tax and a Y/N flag per item, so the tax is split in
     proportion to the net amount of taxable items (taxable CRV lines count towards their item) and rounded to cents
     so the parts add up to the receipt's tax. tax_amount is None when there is nothing sensible to split the tax
-    over: no taxable flags, or taxable lines that cancel out so the implied rate exceeds MAX_TAX_RATE.
+    over: no taxable flags, or taxable lines that cancel out so the implied rate exceeds MAX_TAX_RATE. In that case
+    tax_unsplit is True on every item of a receipt that has tax, since none of them can show a total with tax.
     """
     rows = [dict(item) for item in items]
     index_by_id = {row.get("id"): i for i, row in enumerate(rows)}
@@ -80,7 +86,8 @@ def add_tax_and_crv(items: list[dict[str, Any]], receipt_tax: float) -> list[dic
     tax = round(float(receipt_tax or 0.0), 2)
     base_total = sum(taxable_base.values())
     taxes: dict[int, float | None] = {i: None for i in kept}
-    if abs(base_total) > 1e-9 and 0.0 <= tax / base_total <= MAX_TAX_RATE:
+    split = abs(base_total) > 1e-9 and 0.0 <= tax / base_total <= MAX_TAX_RATE
+    if split:
         taxed = [i for i in kept if taxable_base[i] != 0.0]
         for i in taxed:
             taxes[i] = round(tax * taxable_base[i] / base_total, 2)
@@ -96,5 +103,6 @@ def add_tax_and_crv(items: list[dict[str, Any]], receipt_tax: float) -> list[dic
         row["crv_amount"] = round(crv[index], 2)
         row["tax_amount"] = taxes[index]
         row["tax_crv"] = round((taxes[index] or 0.0) + crv[index], 2)
+        row["tax_unsplit"] = bool(tax) and not split
         result.append(row)
     return result

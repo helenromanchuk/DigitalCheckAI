@@ -94,6 +94,12 @@ def spread_discount(items: list[dict[str, Any]], amount: float, base_key: str) -
     return amount
 
 
+def _mark_crv(item_entry: dict[str, Any]) -> None:
+    # A bottle deposit takes the category of the item it is charged for, so it needs no classifying
+    item_entry["default_category"] = OTHER_CATEGORY
+    item_entry["default_clean_name"] = CRV_NAME
+
+
 def _mark_fuel(item_entry: dict[str, Any]) -> None:
     item_entry["default_category"] = FUEL_CATEGORY
     item_entry["default_clean_name"] = f"{FUEL_NAME_PREFIX}{item_entry['raw_description']})"
@@ -142,6 +148,8 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
         # The receipt is already in the normalized internal format
         if "gross_amount" in raw_item and "net_amount" in raw_item and "item_number" in raw_item:
             item_copy = dict(raw_item)
+            if not item_copy.get("default_category") and is_crv_line(item_copy.get("raw_description")):
+                _mark_crv(item_copy)
             normalized_items.append(item_copy)
             continue
 
@@ -209,9 +217,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
         if is_explicit_fuel:
             _mark_fuel(item_entry)
         elif is_crv_line(full_raw_desc):
-            # A bottle deposit takes the category of the item it is charged for, so it needs no classifying
-            item_entry["default_category"] = OTHER_CATEGORY
-            item_entry["default_clean_name"] = CRV_NAME
+            _mark_crv(item_entry)
             non_fuel_lines += 1
         elif is_keyword_fuel:
             keyword_fuel_items.append((item_entry, amount, unit_price))
