@@ -409,8 +409,6 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path):
 
     db = Database(tmp_path / "test_costco.db")
     db.add_custom_category("Питомцы", "Pets")
-    # Setting an English label on a default category must not override the default label in the prompt
-    db.add_custom_category("Прочее", "Misc")
     captured: dict = {}
 
     def gen(**kw):
@@ -459,14 +457,15 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path):
     assert not re.search(r"[А-Яа-яЁё]", SYSTEM_INSTRUCTION)
     assert not re.search(r"[А-Яа-яЁё]", json.dumps(CategorizedItemSchema.model_json_schema(), ensure_ascii=False))
 
-    custom_labels_en = db.get_category_labels_en()
+    # A label on a default category (stored before such labels were rejected) must not override the default
+    custom_labels_en = {**db.get_category_labels_en(), "Прочее": "Misc"}
     prompt = _build_classification_prompt(batch, categories, custom_labels_en)
     for cat in categories:
         assert cat in prompt
-    assert '"id": 0' in prompt and '"id": 1' in prompt and '"id": 2' in prompt
-    assert '"english_label": "Pets"' in prompt
-    assert '"english_label": "Other"' in prompt
-    assert '"english_label": "Misc"' not in prompt
+    assert '"id":0' in prompt and '"id":1' in prompt and '"id":2' in prompt
+    assert '"english_label":"Pets"' in prompt
+    assert '"english_label":"Other"' in prompt
+    assert '"english_label":"Misc"' not in prompt
 
     # Dynamic schema is cached, restricts category to an enum of allowed categories, and keeps its description
     schema_cls = _build_batch_schema(tuple(categories))
@@ -779,3 +778,56 @@ def test_duplicate_gemini_ids_are_logged(tmp_path: Path, caplog):
     results = GeminiItemClassifier(db)._call_gemini_batch(batch, db.get_all_categories(), _fake_gemini_client(answer), {})
     assert [r["clean_name"] for r in results] == ["Second"]
     assert "id=0" in caplog.text
+
+
+def test_category_names_are_checked_in_database(tmp_path: Path):
+    import pytest
+
+    from app.errors import AppError
+
+    db = Database(tmp_path / "test_costco.db")
+    db.add_custom_category("Питомцы", "Pets")
+
+    # Re-entering in another letter case updates the existing category instead of failing or duplicating it
+    categories = db.add_custom_category("питомцы", "Pet supplies")
+    assert "питомцы" not in categories
+    assert db.get_category_labels_en()["Питомцы"] == "Pet supplies"
+
+    for name, name_en in (("Other", ""), ("Прочее", "Misc"), ("Pet Supplies", ""), ("Зоотовары", "PET SUPPLIES")):
+        with pytest.raises(AppError) as exc_info:
+            db.add_custom_category(name, name_en)
+        assert exc_info.value.code == "category_reserved"
+
+
+def test_manual_category_edit_reuses_existing_category(tmp_path: Path):
+    db = Database(tmp_path / "test_costco.db")
+    db.add_custom_category("Питомцы", "Pets")
+    with db.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO item_catalog (item_number, raw_description, clean_name, category, is_manual_override, classified_by, updated_at)
+            VALUES ('5555', 'DOG FOOD', 'Dog Food', 'Прочее', 0, 'fallback', '2026-10-01')
+            """
+        )
+
+    assert db.update_item_category_manual("5555", "other")["category"] == "Прочее"
+    assert db.update_item_category_manual("5555", "PETS")["category"] == "Питомцы"
+    categories = db.get_all_categories()
+    assert "other" not in categories and "PETS" not in categories
+
+
+def test_duplicate_id_warning_skips_rejected_answers(tmp_path: Path, caplog):
+    db = Database(tmp_path / "test_costco.db")
+    answer = {
+        "items": [
+            {"id": 0, "item_number": "1234", "clean_name": "Right", "category": "Прочее"},
+            {"id": 0, "item_number": "5678", "clean_name": "Wrong", "category": "Прочее"},
+        ]
+    }
+    batch = [
+        {"item_number": "1234", "raw_description": "A"},
+        {"item_number": "5678", "raw_description": "B"},
+    ]
+    results = GeminiItemClassifier(db)._call_gemini_batch(batch, db.get_all_categories(), _fake_gemini_client(answer), {})
+    assert [r["clean_name"] for r in results] == ["Right"]
+    assert "повторный" not in caplog.text

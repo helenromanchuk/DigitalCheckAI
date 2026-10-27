@@ -128,6 +128,13 @@ RESERVED_CATEGORY_NAMES: frozenset[str] = frozenset(
 )
 
 
+def clashes_with_default_category(name: str, name_en: str = "") -> bool:
+    """True for a non-default category whose name or English label repeats a default category's."""
+    if name in DEFAULT_CATEGORY_LABELS_EN:
+        return False
+    return any(value.strip().casefold() in RESERVED_CATEGORY_NAMES for value in (name, name_en) if value.strip())
+
+
 def merge_category_labels_en(custom_labels_en: dict[str, str] | None = None) -> dict[str, str]:
     """Combines custom and default English category labels, with defaults taking precedence."""
     return {**(custom_labels_en or {}), **DEFAULT_CATEGORY_LABELS_EN}

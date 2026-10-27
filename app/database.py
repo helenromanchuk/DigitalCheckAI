@@ -7,12 +7,17 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.config import DB_PATH, DEFAULT_CATEGORIES
+from app.config import DB_PATH, DEFAULT_CATEGORIES, DEFAULT_CATEGORY_LABELS_EN
+from app.errors import AppError
 from app.unit_price import add_unit_prices
 
 # PRAGMA user_version after each one-time data migration (see init_db)
 REPARSE_SCHEMA_VERSION = 1
 ENGLISH_NAMES_SCHEMA_VERSION = 2
+
+
+def _category_reserved(value: str) -> AppError:
+    return AppError("category_reserved", f"'{value}' is already used by another category.", name=value)
 
 
 class Database:
@@ -205,22 +210,47 @@ class Database:
                 result.append(r["category"])
         return result
 
+    @staticmethod
+    def _category_lookup(conn: sqlite3.Connection) -> dict[str, str]:
+        """Maps every category name and English label (casefolded) to the stored category name."""
+        lookup: dict[str, str] = {}
+        for name, name_en in DEFAULT_CATEGORY_LABELS_EN.items():
+            lookup[name.casefold()] = name
+            lookup[name_en.casefold()] = name
+        for row in conn.execute("SELECT name, name_en FROM custom_categories ORDER BY name"):
+            lookup.setdefault(row["name"].casefold(), row["name"])
+            if row["name_en"]:
+                lookup.setdefault(row["name_en"].casefold(), row["name"])
+        for row in conn.execute("SELECT DISTINCT category FROM item_catalog WHERE category != ''"):
+            lookup.setdefault(row["category"].casefold(), row["category"])
+        return lookup
+
     def add_custom_category(self, name: str, name_en: str = "") -> list[str]:
         """
         Adds a new user-defined category. For an existing one, a non-empty name_en sets its English name,
-        so a category added earlier can get a translation too.
+        so a category added earlier can get a translation too (the name may differ in letter case).
+        Raises AppError("category_reserved") when the name or English name belongs to another category,
+        including the defaults: a custom "Other" would compete with "Прочее" in the Gemini prompt.
         """
         clean = name.strip()
+        clean_en = name_en.strip()
         if not clean:
             return self.get_all_categories()
         now = datetime.now(UTC).isoformat()
         with self.connect() as conn:
+            lookup = self._category_lookup(conn)
+            owner = lookup.get(clean.casefold())
+            if owner in DEFAULT_CATEGORIES or (owner and owner.casefold() != clean.casefold()):
+                raise _category_reserved(clean)
+            clean = owner or clean
+            if clean_en and lookup.get(clean_en.casefold(), clean) != clean:
+                raise _category_reserved(clean_en)
             conn.execute(
                 """
                 INSERT INTO custom_categories (name, name_en, created_at) VALUES (?, ?, ?)
                 ON CONFLICT(name) DO UPDATE SET name_en = excluded.name_en WHERE excluded.name_en != ''
                 """,
-                (clean, name_en.strip(), now),
+                (clean, clean_en, now),
             )
         return self.get_all_categories()
 
@@ -342,7 +372,9 @@ class Database:
                 return None
 
             new_clean_name = clean_name.strip() if clean_name and clean_name.strip() else existing["clean_name"]
+            # A typed "Other" or "pets" means the existing "Прочее" or "Питомцы", not a new category
             new_category = category.strip()
+            new_category = self._category_lookup(conn).get(new_category.casefold(), new_category)
 
             conn.execute(
                 """

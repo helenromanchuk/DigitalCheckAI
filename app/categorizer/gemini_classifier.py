@@ -12,7 +12,7 @@ from app.config import (
     DEFAULT_CATEGORY_LABELS_EN,
     DEFAULT_CATEGORY_SCOPES,
     FUEL_CATEGORY,
-    RESERVED_CATEGORY_NAMES,
+    clashes_with_default_category,
     get_gemini_api_key,
     get_gemini_model,
     merge_category_labels_en,
@@ -148,9 +148,9 @@ def _build_classification_prompt(
     ]
     return (
         "Allowed categories (set `category` to the exact `category` value):\n"
-        f"{json.dumps(allowed_entries, ensure_ascii=False, indent=2)}\n\n"
+        f"{json.dumps(allowed_entries, ensure_ascii=False, separators=(',', ':'))}\n\n"
         "Items to decode and categorize:\n"
-        f"{json.dumps(items_payload, ensure_ascii=False, indent=2)}"
+        f"{json.dumps(items_payload, ensure_ascii=False, separators=(',', ':'))}"
     )
 
 
@@ -336,11 +336,7 @@ def _categories_for_gemini(categories: list[str], custom_labels_en: dict[str, st
     """
     result = []
     for cat in categories:
-        is_custom = cat not in DEFAULT_CATEGORY_LABELS_EN
-        clashes = cat.casefold() in RESERVED_CATEGORY_NAMES or custom_labels_en.get(cat, "").casefold() in (
-            RESERVED_CATEGORY_NAMES
-        )
-        if is_custom and clashes:
+        if clashes_with_default_category(cat, custom_labels_en.get(cat, "")):
             logger.warning("Категория %r совпадает со стандартной и не отправляется в Gemini; переименуйте её.", cat)
             continue
         result.append(cat)
@@ -462,8 +458,6 @@ class GeminiItemClassifier:
             if type(item_id) is not int or not (0 <= item_id < len(batch)):
                 logger.warning("Gemini вернул id товара не из пакета: %r", item_id)
                 continue
-            if item_id in results_by_id:
-                logger.warning("Gemini вернул повторный ответ для id=%d, берём последний", item_id)
             src = batch[item_id]
             inum = str(src["item_number"])
             returned_inum = str(entry.get("item_number", ""))
@@ -475,6 +469,8 @@ class GeminiItemClassifier:
                     inum,
                 )
                 continue
+            if item_id in results_by_id:
+                logger.warning("Gemini вернул повторный ответ для id=%d, берём последний", item_id)
             raw_desc = str(src.get("raw_description", ""))
             # The response schema limits category to the allowed values; this guards against SDK fallbacks
             cat = str(entry.get("category", ""))
