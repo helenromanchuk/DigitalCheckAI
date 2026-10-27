@@ -68,6 +68,11 @@ def _is_discount_row(raw_item: dict[str, Any]) -> tuple[bool, str | None]:
     return False, None
 
 
+def _mark_fuel(item_entry: dict[str, Any]) -> None:
+    item_entry["default_category"] = "Авто и заправка (Gas Station)"
+    item_entry["default_clean_name"] = f"Топливо Costco ({item_entry['raw_description']})"
+
+
 def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any] | None:
     """
     Parses a receipt from a Costco GraphQL response (getReceiptsWithCounts / receipts).
@@ -102,6 +107,9 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
     raw_items = raw_receipt.get("itemArray") or raw_receipt.get("items") or []
     normalized_items: list[dict[str, Any]] = []
     pending_discounts: list[tuple[str | None, float, dict[str, Any]]] = []
+    # Lines that look like fuel only by a keyword on a receipt of unknown type, and how many lines don't
+    keyword_fuel_items: list[dict[str, Any]] = []
+    non_fuel_lines = 0
 
     for raw_item in raw_items:
         # The receipt is already in the normalized internal format
@@ -134,14 +142,15 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
         if qty == 0:
             qty = 1.0
         upper_desc = full_raw_desc.upper()
-        # Every line of a gas station receipt is fuel. On a warehouse receipt only explicit fuel fields count;
-        # description keywords are checked only when the document type is unknown
-        is_fuel_line = (
-            is_gas_doc
-            or bool(raw_item.get("fuelGradeDescription"))
-            or (not is_warehouse_doc and bool(GAS_KEYWORDS_RE.search(upper_desc)))
+        # Every line of a gas station receipt is fuel, and so is a line with explicit fuel fields.
+        # Description keywords are checked only when the document type is unknown, and they are
+        # trusted only if the whole receipt is fuel (see below): "KS DIESEL EXHAUST FLUID" is merchandise
+        is_explicit_fuel = is_gas_doc or bool(raw_item.get("fuelGradeDescription"))
+        is_keyword_fuel = (
+            not is_explicit_fuel and not is_warehouse_doc and bool(GAS_KEYWORDS_RE.search(upper_desc))
         )
-        if is_fuel_line:
+        is_fuel_line = is_explicit_fuel or is_keyword_fuel
+        if is_explicit_fuel:
             is_gas = True
 
         unit_price = _to_float(raw_item.get("itemUnitPriceAmount") or raw_item.get("unit_price"), 0.0)
@@ -171,11 +180,19 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
             # Fuel is sold in gallons, not pounds
             "is_weight": sold_by_measure and not is_fuel_line,
         }
-        if is_fuel_line:
-            item_entry["default_category"] = "Авто и заправка (Gas Station)"
-            item_entry["default_clean_name"] = f"Топливо Costco ({full_raw_desc})"
+        if is_explicit_fuel:
+            _mark_fuel(item_entry)
+        elif is_keyword_fuel:
+            keyword_fuel_items.append(item_entry)
+        else:
+            non_fuel_lines += 1
 
         normalized_items.append(item_entry)
+
+    if keyword_fuel_items and non_fuel_lines == 0:
+        for item_entry in keyword_fuel_items:
+            _mark_fuel(item_entry)
+        is_gas = True
 
     # Apply discounts to their items
     total_discounts_applied = 0.0
@@ -186,13 +203,15 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
                 (i for i in reversed(normalized_items) if i["item_number"] == target_num and i["gross_amount"] > 0),
                 None,
             )
+        # Count every coupon as savings, including one kept as its own line below
+        total_discounts_applied = round(total_discounts_applied + disc_val, 2)
         if target is not None:
             target["discount_amount"] = round(target["discount_amount"] + disc_val, 2)
             target["net_amount"] = round(target["gross_amount"] - target["discount_amount"], 2)
-            total_discounts_applied = round(total_discounts_applied + disc_val, 2)
             continue
         # The coupon's item isn't on the receipt: don't attach it to an arbitrary item,
-        # keep it as a separate negative line (it may also be a return)
+        # keep it as a separate negative line (it may also be a return). Its category is unknown, so it
+        # goes to "Прочее" as a parser row and isn't sent to the classifier
         item_number = str(raw_item.get("itemNumber") or "").strip() or f"DISCOUNT-{target_num or 'UNKNOWN'}"
         desc = str(raw_item.get("itemDescription01") or "").strip() or f"DISCOUNT #{item_number}"
         amount = -disc_val
@@ -200,13 +219,16 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
             {
                 "item_number": item_number,
                 "raw_description": desc,
-                "quantity": round(_to_float(raw_item.get("unit"), -1.0) or -1.0, 3),
+                # Coupon rows carry unit=1; the line is a negative amount, so its quantity is negative too
+                "quantity": -abs(round(_to_float(raw_item.get("unit"), 1.0) or 1.0, 3)),
                 "unit_price": disc_val,
                 "gross_amount": amount,
                 "discount_amount": 0.0,
                 "net_amount": amount,
                 "tax_flag": str(raw_item.get("taxFlag") or ""),
                 "is_weight": False,
+                "default_category": "Прочее",
+                "default_clean_name": f"Скидка / купон ({desc})",
             }
         )
 
@@ -276,9 +298,13 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
     for idx, line in enumerate(line_items, start=1):
         if line.get("isFeeItem"):
             # Fees (delivery, disposal, etc.) aren't merchandise: don't classify them or count them in categories
-            fees = round(fees + _to_float(line.get("merchandiseTotal") or line.get("unitPrice"), 0.0), 2)
+            fee = _to_float(line.get("merchandiseTotal"), 0.0)
+            if fee == 0.0:
+                fee_qty = _to_float(line.get("quantity") or line.get("orderedTotalQuantity"), 1.0)
+                fee = _to_float(line.get("unitPrice"), 0.0) * (fee_qty if fee_qty > 0 else 1.0)
+            fees = round(fees + fee, 2)
             continue
-        item_num =str(line.get("itemNumber") or line.get("item_number") or f"ONL-{idx}").strip()
+        item_num = str(line.get("itemNumber") or line.get("item_number") or f"ONL-{idx}").strip()
         desc = str(
             line.get("itemDescription")
             or line.get("productName")

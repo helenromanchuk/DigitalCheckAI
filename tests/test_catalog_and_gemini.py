@@ -184,3 +184,56 @@ def test_fuel_keeps_parser_category_and_skips_classifier(tmp_path: Path):
     with db.connect() as conn:
         row = conn.execute("SELECT category, classified_by FROM item_catalog WHERE item_number = '800877'").fetchone()
     assert (row["category"], row["classified_by"]) == ("Авто и заправка (Gas Station)", "parser")
+
+
+def test_existing_pending_fuel_and_orphan_rows_are_not_sent_to_classifier(tmp_path: Path):
+    db = Database(tmp_path / "test_costco.db")
+    db.upsert_receipts(
+        parse_any_costco_payload(
+            {
+                "transactionBarcode": "GAS-OLD",
+                "transactionDate": "2026-10-01",
+                "documentType": "FuelReceipt",
+                "itemArray": [{"itemNumber": "800877", "itemDescription01": "REGULAR", "unit": 10, "amount": 45.0}],
+            }
+        )
+    )
+    with db.connect() as conn:
+        # State left by older syncs: fuel saved as pending, and a fee row with no receipt line
+        conn.execute("UPDATE item_catalog SET category = 'Прочее', classified_by = 'pending' WHERE item_number = '800877'")
+        conn.execute(
+            """
+            INSERT INTO item_catalog (item_number, raw_description, clean_name, category, is_manual_override, classified_by, updated_at)
+            VALUES ('FEE1', 'DELIVERY FEE', 'DELIVERY FEE', 'Прочее', 0, 'pending', '2026-10-01')
+            """
+        )
+
+    db.init_db()
+
+    assert db.get_pending_items_for_gemini() == []
+    with db.connect() as conn:
+        row = conn.execute("SELECT category, classified_by FROM item_catalog WHERE item_number = '800877'").fetchone()
+    assert (row["category"], row["classified_by"]) == ("Авто и заправка (Gas Station)", "parser")
+
+
+def test_resync_moves_pending_row_to_parser_category(tmp_path: Path):
+    db = Database(tmp_path / "test_costco.db")
+    gas = {
+        "transactionBarcode": "GAS-2",
+        "transactionDate": "2026-10-02",
+        "documentType": "FuelReceipt",
+        "itemArray": [{"itemNumber": "800877", "itemDescription01": "REGULAR", "unit": 10, "amount": 45.0}],
+    }
+    with db.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO item_catalog (item_number, raw_description, clean_name, category, is_manual_override, classified_by, updated_at)
+            VALUES ('800877', 'REGULAR', 'REGULAR', 'Прочее', 0, 'fallback', '2026-10-01')
+            """
+        )
+
+    db.upsert_receipts(parse_any_costco_payload(gas))
+
+    with db.connect() as conn:
+        row = conn.execute("SELECT category, classified_by FROM item_catalog WHERE item_number = '800877'").fetchone()
+    assert (row["category"], row["classified_by"]) == ("Авто и заправка (Gas Station)", "parser")

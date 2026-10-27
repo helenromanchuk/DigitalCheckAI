@@ -107,6 +107,24 @@ class Database:
             item_columns = {row["name"] for row in conn.execute("PRAGMA table_info(receipt_items)")}
             if "is_weight" not in item_columns:
                 conn.execute("ALTER TABLE receipt_items ADD COLUMN is_weight INTEGER NOT NULL DEFAULT 0")
+            # Migration: fuel synced before the parser's category was trusted is still pending/fallback,
+            # so the classifier could move it out of the gas category. Lock it to the parser's category
+            conn.execute(
+                """
+                UPDATE item_catalog
+                SET category = 'Авто и заправка (Gas Station)',
+                    clean_name = 'Топливо Costco (' || raw_description || ')',
+                    classified_by = 'parser'
+                WHERE is_manual_override = 0
+                  AND classified_by IN ('pending', 'fallback')
+                  AND item_number IN (
+                      SELECT ri.item_number
+                      FROM receipt_items ri
+                      JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
+                      WHERE r.receipt_type = 'gas' AND ri.net_amount > 0
+                  )
+                """
+            )
 
     def get_all_categories(self) -> list[str]:
         """Returns the combined list of default and user-defined categories."""
@@ -160,7 +178,7 @@ class Database:
                     c.category,
                     MAX(ri.unit_price) AS sample_unit_price
                 FROM item_catalog c
-                LEFT JOIN receipt_items ri ON ri.item_number = c.item_number
+                JOIN receipt_items ri ON ri.item_number = c.item_number
                 WHERE c.is_manual_override = 0 AND c.classified_by NOT IN ('gemini', 'parser')
                 GROUP BY c.item_number
                 """
@@ -387,6 +405,21 @@ class Database:
                                 "sample_unit_price": float(line.get("unit_price", 0.0)),
                                 "receipt_type": receipt.get("receipt_type", "warehouse"),
                             }
+                    elif (
+                        line.get("default_category")
+                        and not cat_row["is_manual_override"]
+                        and cat_row["classified_by"] != "parser"
+                    ):
+                        # The row was created before the parser knew its category (e.g. fuel saved as pending):
+                        # take the parser's category so the classifier can't move it again
+                        conn.execute(
+                            """
+                            UPDATE item_catalog
+                            SET clean_name = ?, category = ?, classified_by = 'parser', updated_at = ?
+                            WHERE item_number = ?
+                            """,
+                            (line.get("default_clean_name") or raw_desc, line["default_category"], now, item_num),
+                        )
 
                     if line.get("image_url"):
                         conn.execute(

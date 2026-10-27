@@ -232,3 +232,52 @@ def test_fuel_keywords_used_only_when_document_type_is_unknown():
     r = parse_any_costco_payload([receipt])[0]
     assert r["receipt_type"] == "gas"
     assert r["items"][0]["default_category"] == "Авто и заправка (Gas Station)"
+
+
+def test_unmatched_coupon_counts_as_savings_with_negative_quantity():
+    receipt = {
+        "transactionBarcode": "R-COUPON",
+        "transactionDateTime": "2026-10-26T12:00:00",
+        "documentType": "WarehouseReceiptDetail",
+        "itemArray": [
+            {"itemNumber": "111", "itemDescription01": "MILK", "unit": 1, "amount": 5.0},
+            {"itemNumber": "999", "itemDescription01": "/ 222", "unit": 1, "amount": -2.0},
+        ],
+    }
+
+    r = parse_any_costco_payload([receipt])[0]
+    coupon = next(i for i in r["items"] if i["item_number"] == "999")
+    assert r["instant_savings"] == 2.0
+    assert r["subtotal"] == 3.0
+    assert coupon["quantity"] == -1.0
+    assert coupon["net_amount"] == -2.0
+    assert coupon["default_category"] == "Прочее"
+
+
+def test_fuel_keyword_in_mixed_receipt_of_unknown_type_is_merchandise():
+    receipt = {
+        "transactionBarcode": "R-DEF",
+        "transactionDateTime": "2026-10-26T12:00:00",
+        "itemArray": [
+            {"itemNumber": "555", "itemDescription01": "KS DIESEL EXHAUST FLUID", "unit": 1, "amount": 12.99},
+            {"itemNumber": "111", "itemDescription01": "MILK", "unit": 1, "amount": 4.59},
+        ],
+    }
+
+    r = parse_any_costco_payload([receipt])[0]
+    assert r["receipt_type"] == "warehouse"
+    assert all("default_category" not in i for i in r["items"])
+
+
+def test_fee_without_total_is_unit_price_times_quantity():
+    order = {
+        "orderNumber": "FEE-QTY",
+        "orderPlacedDate": "2026-10-26",
+        "orderLineItems": [
+            {"itemNumber": "A1", "itemDescription": "TV", "unitPrice": 100, "quantity": 1, "merchandiseTotal": 100},
+            {"itemNumber": "FEE1", "itemDescription": "DISPOSAL FEE", "unitPrice": 25, "quantity": 2, "isFeeItem": True},
+        ],
+    }
+
+    r = parse_any_costco_payload([order])[0]
+    assert r["total"] == 150.0
