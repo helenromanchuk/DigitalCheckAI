@@ -6,11 +6,11 @@ from inside an open costco.com page, where Kasada intercepts the XHR and adds th
 Direct requests (httpx, fetch) get a 404.
 """
 import asyncio
-from datetime import datetime, timedelta
 import json
 import logging
 import threading
 import time
+from datetime import datetime, timedelta
 from typing import Any
 
 from app.config import BROWSER_PROFILE_DIR

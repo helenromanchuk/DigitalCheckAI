@@ -2,7 +2,7 @@
 import re
 from typing import Any
 
-from app.config import FUEL_CATEGORY
+from app.config import FUEL_CATEGORY, OTHER_CATEGORY
 
 # Names for items the parser categorizes itself. Product names are stored in English, like the names
 # Gemini decodes, so the catalog has one language whatever the UI language is
@@ -62,9 +62,7 @@ def _is_discount_row(raw_item: dict[str, Any]) -> tuple[bool, str | None]:
             return True, match.group(1)
 
     if amount < 0 and (
-        desc1.startswith("/")
-        or desc1.startswith("#")
-        or desc1.startswith("TPD")
+        desc1.startswith(("/", "#", "TPD"))
         or "INSTANT SAVINGS" in desc1
         or "CPN" in desc1
         or "COUPON" in desc1
@@ -240,7 +238,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
             continue
         # The coupon's item isn't on the receipt: don't attach it to an arbitrary item, keep it as
         # a separate discount line (gross 0, so the discount shows up as savings, not as spend).
-        # Its category is unknown, so it goes to "Прочее" as a parser row and isn't sent to the classifier.
+        # Its category is unknown, so it goes to "Other" as a parser row and isn't sent to the classifier.
         # The DISCOUNT- prefix keeps it from colliding with a real product's catalog row: the coupon row's
         # own itemNumber may be a product number
         coupon_ref = target_num or str(raw_item.get("itemNumber") or "").strip() or "UNKNOWN"
@@ -258,7 +256,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
                 "net_amount": -disc_val,
                 "tax_flag": str(raw_item.get("taxFlag") or ""),
                 "is_weight": False,
-                "default_category": "Прочее",
+                "default_category": OTHER_CATEGORY,
                 "default_clean_name": f"{COUPON_NAME_PREFIX}{desc})",
             }
         )

@@ -1,13 +1,18 @@
 """FastAPI routes for Costco.com sync, categorization, and spending analytics."""
 import asyncio
-from datetime import date, timedelta
 import json
+from datetime import date, timedelta
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 from app.categorizer.gemini_classifier import GeminiItemClassifier
-from app.config import get_gemini_api_key, get_gemini_model, save_gemini_api_key
+from app.config import (
+    get_gemini_api_key,
+    get_gemini_model,
+    save_gemini_api_key,
+)
 from app.database import Database
 from app.errors import AppError, error_detail
 from app.scraper.costco_client import CostcoClient
@@ -51,7 +56,7 @@ class UpdateItemCategoryRequest(BaseModel):
 
 class AddCategoryRequest(BaseModel):
     name: str = Field(..., min_length=1)
-    name_en: str = ""
+    name_ru: str = ""
 
 
 class SetGeminiKeyRequest(BaseModel):
@@ -68,7 +73,7 @@ def get_app_config(db: Database = Depends(get_db)) -> dict[str, Any]:
         "has_gemini_key": has_key,
         "gemini_model": get_gemini_model(),
         "categories": db.get_all_categories(),
-        "category_labels_en": db.get_category_labels_en(),
+        "category_labels_ru": db.get_category_labels_ru(),
         "pending_gemini_items_count": len(pending),
     }
 
@@ -95,9 +100,15 @@ def create_custom_category(
     payload: AddCategoryRequest,
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
-    """Adds a new user-defined category."""
-    categories = db.add_custom_category(payload.name, payload.name_en)
-    return {"categories": categories, "category_labels_en": db.get_category_labels_en()}
+    """Adds a new user-defined category (or sets the Russian label of an existing custom one)."""
+    try:
+        categories = db.add_custom_category(payload.name, payload.name_ru)
+    except AppError as exc:
+        raise HTTPException(status_code=400, detail=exc.to_detail()) from exc
+    return {
+        "categories": categories,
+        "category_labels_ru": db.get_category_labels_ru(),
+    }
 
 
 @router.post("/sync")
@@ -271,11 +282,14 @@ def update_item_category(
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
     """Lets the user manually change the category (and/or name) of the given Item #."""
-    updated = db.update_item_category_manual(
-        item_number=item_number,
-        category=payload.category,
-        clean_name=payload.clean_name,
-    )
+    try:
+        updated = db.update_item_category_manual(
+            item_number=item_number,
+            category=payload.category,
+            clean_name=payload.clean_name,
+        )
+    except AppError as exc:
+        raise HTTPException(status_code=400, detail=exc.to_detail()) from exc
     if not updated:
         raise HTTPException(
             status_code=404,

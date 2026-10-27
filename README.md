@@ -67,7 +67,7 @@ flowchart LR
 
 ## Quick start (Windows)
 
-Double-click **`run.bat`** or run in a terminal:
+Requires **Python 3.11+**. Double-click **`run.bat`** or run in a terminal:
 
 ```powershell
 python -m venv .venv
@@ -81,6 +81,7 @@ Then open **http://localhost:8000** in your browser.
 ## Gemini API key
 1. Click **"Указать ключ Gemini API"** ("Set Gemini API key") in the top right corner of the dashboard, or set `GEMINI_API_KEY=...` in the `.env` file.
 2. The key is stored locally in `.env`.
+3. To see exactly what is sent to Gemini, add `LOG_LEVEL=DEBUG` to `.env` and restart the server. The console then shows every batch prompt, the raw JSON response, the call duration and token counts (the API key is never logged). The default level is `INFO`.
 
 ## Running tests
 ```powershell

@@ -157,6 +157,9 @@ const I18N = {
     "error.invalid_json": "Некорректный JSON-файл: {error}",
     "error.no_receipts": "В файле не найдено чеков Costco или Safeway.",
     "error.item_not_found": "Артикул {item} не найден в справочнике.",
+    "error.category_reserved": "Название «{name}» уже занято другой категорией. Выберите другое.",
+    "error.category_empty": "Введите название категории.",
+    "error.category_not_english": "Название «{name}» должно быть на английском: его получает Gemini. Русское название укажите во втором поле.",
     "error.unknown": "{message}",
     "sync.success": "Успешно загружено чеков: {fetched} (новых: {inserted}). Расшифровано новых Item#: {newItems} ({provider}).",
 
@@ -195,12 +198,14 @@ const I18N = {
     "help.copyFailed": "Не удалось скопировать автоматически. Откройте «посмотреть код» и скопируйте текст вручную.",
 
     "newCat.title": "Добавить свою категорию",
-    "newCat.label": "Название категории",
-    "newCat.placeholder": "Например: Детские товары или Питомцы",
-    "newCat.enLabel": "Название на английском (необязательно)",
-    "newCat.enPlaceholder": "Например: Kids или Pets",
-    "newCat.enHint": "Показывается, когда интерфейс на английском. Чтобы перевести уже созданную категорию, введите её название ещё раз вместе с английским.",
-    "newCat.added": "Категория «{name}» добавлена! Теперь её можно выбрать для любого товара."
+    "newCat.label": "Название на английском",
+    "newCat.placeholder": "Например: Kids или Pets",
+    "newCat.ruLabel": "Название на русском (необязательно)",
+    "newCat.ruPlaceholder": "Например: Детские товары или Питомцы",
+    "newCat.ruHint": "Gemini получает только английское название, русское показывается в интерфейсе. Чтобы перевести уже созданную категорию, введите её английское название ещё раз вместе с русским.",
+    "newCat.added": "Категория «{name}» добавлена! Теперь её можно выбрать для любого товара.",
+    "newCat.failed": "Не удалось добавить категорию.",
+    "config.loadFailed": "Не удалось загрузить настройки приложения. Обновите страницу."
   },
 
   en: {
@@ -358,6 +363,9 @@ const I18N = {
     "error.invalid_json": "Invalid JSON file: {error}",
     "error.no_receipts": "No Costco or Safeway receipts found in the file.",
     "error.item_not_found": "Item {item} not found in the catalog.",
+    "error.category_reserved": "“{name}” is already used by another category. Please choose another name.",
+    "error.category_empty": "Please enter a category name.",
+    "error.category_not_english": "“{name}” must be in English: Gemini receives this name. Put the Russian name in the second field.",
     "error.unknown": "{message}",
     "sync.success": "Receipts downloaded: {fetched} (new: {inserted}). New Item #s decoded: {newItems} ({provider}).",
 
@@ -396,32 +404,15 @@ const I18N = {
     "help.copyFailed": "Couldn't copy automatically. Open “view code” and copy the text by hand.",
 
     "newCat.title": "Add a custom category",
-    "newCat.label": "Category name",
+    "newCat.label": "Category name (English)",
     "newCat.placeholder": "e.g. Kids or Pets",
-    "newCat.enLabel": "English name (optional)",
-    "newCat.enPlaceholder": "e.g. Kids or Pets",
-    "newCat.enHint": "Shown when the interface is in English. To translate an existing category, enter its name again together with the English one.",
-    "newCat.added": "Category “{name}” added! You can now assign it to any item."
+    "newCat.ruLabel": "Russian name (optional)",
+    "newCat.ruPlaceholder": "e.g. Детские товары",
+    "newCat.ruHint": "Gemini only gets the English name; the Russian one is shown when the interface is in Russian. To translate an existing category, enter its English name again together with the Russian one.",
+    "newCat.added": "Category “{name}” added! You can now assign it to any item.",
+    "newCat.failed": "Could not add the category.",
+    "config.loadFailed": "Could not load the app settings. Please reload the page."
   }
-};
-
-// Default categories are stored in the database under their Russian names; show English names in the English UI
-const CATEGORY_LABELS_EN = {
-  "Мясо, птица и морепродукты": "Meat, poultry & seafood",
-  "Овощи, фрукты и ягоды": "Fruits, vegetables & berries",
-  "Молочные продукты, сыр и яйца": "Dairy, cheese & eggs",
-  "Выпечка, хлеб и готовая еда (Deli)": "Bakery, bread & prepared food (Deli)",
-  "Бакалея, масла, специи и консервы": "Pantry, oils, spices & canned goods",
-  "Заморозка и полуфабрикаты": "Frozen & ready meals",
-  "Снеки, сладости, орехи и напитки": "Snacks, sweets, nuts & drinks",
-  "Бытовая химия, бумага и уборка": "Household, paper & cleaning",
-  "Здоровье, аптека, витамины и гигиена": "Health, pharmacy, vitamins & personal care",
-  "Товары для дома, кухни и сада": "Home, kitchen & garden",
-  "Одежда и обувь": "Clothing & shoes",
-  "Электроника и техника": "Electronics & appliances",
-  "Авто и заправка (Gas Station)": "Auto & fuel (Gas Station)",
-  "Алкоголь": "Alcohol",
-  "Прочее": "Other"
 };
 
 function detectLang() {
@@ -441,12 +432,12 @@ function t(key, params = {}) {
   return template.replace(/\{(\w+)\}/g, (match, name) => (name in params ? String(params[name]) : match));
 }
 
-// English names of the user's own categories, from /api/config
-let customCategoryLabelsEn = {};
+// Categories are stored under their English names; Russian labels (defaults and custom) come from /api/config
+let categoryLabelsRu = {};
 
 function categoryLabel(category) {
-  if (currentLang !== "en") return category;
-  return CATEGORY_LABELS_EN[category] || customCategoryLabelsEn[category] || category;
+  if (currentLang !== "ru") return category;
+  return categoryLabelsRu[category] || category;
 }
 
 function applyStaticTranslations() {

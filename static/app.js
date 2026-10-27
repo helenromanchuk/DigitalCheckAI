@@ -137,15 +137,24 @@ function setStore(store) {
   if (currentStore === "search") document.getElementById("purchaseSearchInput").focus();
 }
 
+// Returns false when the config can't be loaded: without categories and their labels the dashboard can't render
 async function loadConfig() {
-  const res = await fetch("/api/config");
-  lastConfig = await res.json();
+  try {
+    const res = await fetch("/api/config");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    lastConfig = await res.json();
+  } catch (err) {
+    console.warn("Failed to load /api/config:", err);
+    showBanner(t("config.loadFailed"), "error");
+    return false;
+  }
   renderConfig(lastConfig);
+  return true;
 }
 
 function renderConfig(data) {
   availableCategories = data.categories || [];
-  customCategoryLabelsEn = data.category_labels_en || {};
+  categoryLabelsRu = data.category_labels_ru || {};
 
   const dot = document.getElementById("geminiStatusDot");
   const txt = document.getElementById("geminiStatusText");
@@ -173,7 +182,7 @@ function populateCategoryFilterSelect() {
 }
 
 async function refreshAll() {
-  await loadConfig();
+  if (!(await loadConfig())) return;
   if (currentStore === "search") {
     await runPurchaseSearch();
     return;
@@ -666,7 +675,10 @@ async function updateItemCategory(itemNumber, category, newCleanName) {
     showBanner(t("banner.itemSaved", { item: itemNumber }), "success");
     await Promise.all([loadStats(), loadMembershipAnalytics(), loadItemsTable(), loadReceiptsList()]);
   } else {
-    showBanner(t("banner.itemFailed", { item: itemNumber }), "error");
+    const body = await res.json().catch(() => ({}));
+    const detail = body.detail;
+    const hasCode = detail && typeof detail === "object" && !Array.isArray(detail) && detail.code;
+    showBanner(hasCode ? apiErrorText(detail, "banner.itemFailed") : t("banner.itemFailed", { item: itemNumber }), "error");
   }
 }
 
@@ -917,19 +929,22 @@ function closeNewCategoryModal() {
 
 async function createNewCategory() {
   const name = document.getElementById("newCategoryInput").value.trim();
-  const nameEn = document.getElementById("newCategoryEnInput").value.trim();
+  const nameRu = document.getElementById("newCategoryRuInput").value.trim();
   if (!name) return;
   const res = await fetch("/api/categories", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name, name_en: nameEn })
+    body: JSON.stringify({ name, name_ru: nameRu })
   });
   if (res.ok) {
     document.getElementById("newCategoryInput").value = "";
-    document.getElementById("newCategoryEnInput").value = "";
+    document.getElementById("newCategoryRuInput").value = "";
     closeNewCategoryModal();
     showBanner(t("newCat.added", { name }), "success");
     await refreshAll();
+  } else {
+    const body = await res.json().catch(() => ({}));
+    showBanner(apiErrorText(body.detail, "newCat.failed"), "error");
   }
 }
 
