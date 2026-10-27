@@ -384,7 +384,7 @@ def test_custom_category_english_name_can_be_added_later(tmp_path: Path):
     assert db.get_all_categories().count("Питомцы") == 1
 
 
-def test_gemini_prompt_includes_store_weight_and_category_rules(tmp_path: Path, monkeypatch):
+def test_gemini_prompt_schema_and_english_or_prefix_handling(tmp_path: Path, monkeypatch):
     import json
     import re
     import types as pytypes
@@ -394,10 +394,12 @@ def test_gemini_prompt_includes_store_weight_and_category_rules(tmp_path: Path, 
     from app.categorizer.gemini_classifier import (
         SYSTEM_INSTRUCTION,
         CategorizedItemSchema,
+        _build_batch_schema,
         _build_classification_prompt,
     )
 
     db = Database(tmp_path / "test_costco.db")
+    db.add_custom_category("Питомцы", "Pets")
     captured: dict = {}
 
     class FakeClient:
@@ -409,10 +411,22 @@ def test_gemini_prompt_includes_store_weight_and_category_rules(tmp_path: Path, 
                         {
                             "items": [
                                 {
-                                    "item_number": "SWY-123",
+                                    # Dropped SWY- prefix and returned English default category heading
+                                    "item_number": "7989311562",
                                     "clean_name": "O Organics Broth (32 fl oz)",
-                                    "category": "Бакалея, масла, специи и консервы",
-                                }
+                                    "category": "Pantry, oils, spices & canned goods",
+                                },
+                                {
+                                    "item_number": "9001",
+                                    "clean_name": "Kirkland Dog Treats (5 lb)",
+                                    # Returned custom category's English name
+                                    "category": "Pets",
+                                },
+                                {
+                                    "item_number": "9002",
+                                    "clean_name": "Mystery Item",
+                                    "category": "Nonexistent Category",
+                                },
                             ]
                         },
                         ensure_ascii=False,
@@ -423,18 +437,67 @@ def test_gemini_prompt_includes_store_weight_and_category_rules(tmp_path: Path, 
 
     monkeypatch.setattr(genai, "Client", FakeClient)
     categories = db.get_all_categories()
-    batch = [{"item_number": "SWY-123", "raw_description": "O ORGNC BROTH 32OZ", "sample_unit_price": 3.49}]
-    prompt = _build_classification_prompt(batch, categories)
+    batch = [
+        {"item_number": "SWY-7989311562", "raw_description": "O ORGNC BROTH 32OZ", "sample_unit_price": 3.49},
+        {"item_number": "9001", "raw_description": "KS DOG TREATS 5LB", "sample_unit_price": 19.99},
+        {"item_number": "9002", "raw_description": "MYSTERY", "sample_unit_price": 1.00},
+    ]
 
-    assert "Safeway" in prompt and "SWY-" in prompt
-    assert "fl oz" in prompt
-    assert "Master Case" in prompt
+    # Static rules live in SYSTEM_INSTRUCTION (English-only); per-batch prompt holds only categories and items
+    assert "Safeway" in SYSTEM_INSTRUCTION and "SWY-" in SYSTEM_INSTRUCTION
+    assert "fl oz" in SYSTEM_INSTRUCTION
+    assert "Master Case" in SYSTEM_INSTRUCTION
+    assert "Custom user-defined categories take priority" in SYSTEM_INSTRUCTION
     assert not re.search(r"[А-Яа-яЁё]", SYSTEM_INSTRUCTION)
     assert not re.search(r"[А-Яа-яЁё]", json.dumps(CategorizedItemSchema.model_json_schema(), ensure_ascii=False))
     assert not re.search(r"[А-Яа-яЁё]", _build_classification_prompt(batch, ["Pantry"]))
+
+    prompt = _build_classification_prompt(batch, categories, db.get_category_labels_en())
     for cat in categories:
         assert cat in prompt
+    assert '"english_label": "Pets"' in prompt
 
-    GeminiItemClassifier(db)._call_gemini_batch(batch, categories, "key")
+    # Dynamic schema restricts category to an enum of the allowed categories
+    schema_json = _build_batch_schema(categories).model_json_schema()
+    assert categories in [
+        defn.get("enum") for defn in schema_json.get("$defs", {}).values() if "enum" in defn
+    ]
+
+    results = GeminiItemClassifier(db)._call_gemini_batch(batch, categories, "key")
     assert captured["config"].system_instruction == SYSTEM_INSTRUCTION
-    assert "SWY-123" in captured["contents"]
+    assert "SWY-7989311562" in captured["contents"]
+    assert results == [
+        {
+            "item_number": "SWY-7989311562",
+            "raw_description": "O ORGNC BROTH 32OZ",
+            "clean_name": "O Organics Broth (32 fl oz)",
+            "category": "Бакалея, масла, специи и консервы",
+        },
+        {
+            "item_number": "9001",
+            "raw_description": "KS DOG TREATS 5LB",
+            "clean_name": "Kirkland Dog Treats (5 lb)",
+            "category": "Питомцы",
+        },
+        {
+            "item_number": "9002",
+            "raw_description": "MYSTERY",
+            "clean_name": "Mystery Item",
+            "category": "Прочее",
+        },
+    ]
+
+
+def test_default_category_labels_en_match_frontend_i18n():
+    import json
+    import re
+
+    from app.config import BASE_DIR, DEFAULT_CATEGORIES, DEFAULT_CATEGORY_LABELS_EN
+
+    i18n_js = (BASE_DIR / "static" / "i18n.js").read_text(encoding="utf-8")
+    match = re.search(r"const\s+CATEGORY_LABELS_EN\s*=\s*(\{.*?\});", i18n_js, flags=re.DOTALL)
+    assert match is not None
+    js_labels = json.loads(match.group(1))
+
+    assert DEFAULT_CATEGORY_LABELS_EN == js_labels
+    assert list(DEFAULT_CATEGORY_LABELS_EN) == DEFAULT_CATEGORIES

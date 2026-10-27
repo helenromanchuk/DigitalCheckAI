@@ -2,11 +2,12 @@
 import json
 import logging
 import re
+from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 
-from app.config import FUEL_CATEGORY, get_gemini_api_key, get_gemini_model
+from app.config import DEFAULT_CATEGORY_LABELS_EN, FUEL_CATEGORY, get_gemini_api_key, get_gemini_model
 from app.database import Database
 
 logger = logging.getLogger(__name__)
@@ -16,18 +17,21 @@ GEMINI_TIMEOUT_MS = 120_000
 
 class CategorizedItemSchema(BaseModel):
     item_number: str = Field(
-        description="Exact item_number from the input list without modifications (keep prefixes like 'SWY-' and leading zeros)"
+        description=(
+            "Exact item_number from the input list without modifications "
+            "(keep prefixes like 'SWY-' and leading zeros)"
+        )
     )
     clean_name: str = Field(
         description=(
-            "Full decoded product name in English with the consumer package size/weight/count in parentheses at the end: "
-            "use 'lb' or 'oz' for solid weight (multi-packs as 'N x M oz' or 'N x M lb'), and 'fl oz', 'ml', 'L', or 'gal' "
-            "for liquids (e.g. 'Kirkland Signature Organic Extra Virgin Olive Oil (2 L)', "
+            "Full decoded product name in English with the consumer package size/weight/count in parentheses "
+            "at the end: use 'lb' or 'oz' for solid weight (multi-packs as 'N x M oz' or 'N x M lb'), and "
+            "'fl oz', 'ml', 'L', or 'gal' for liquids (e.g. 'Kirkland Signature Organic Extra Virgin Olive Oil (2 L)', "
             "'Pistachio Chocolate Bar (6 x 2.6 oz)', 'Caliwater Cactus Water Variety Pack (6 x 16.9 fl oz)')"
         )
     )
     category: str = Field(
-        description="Exact category string selected verbatim from the provided Allowed categories list"
+        description="Exact category value selected verbatim from the provided Allowed categories list"
     )
 
 
@@ -35,87 +39,165 @@ class CategorizedBatchSchema(BaseModel):
     items: list[CategorizedItemSchema]
 
 
+# Scope description for each default category, keyed by its canonical DB name from app.config
+_DEFAULT_CATEGORY_SCOPES: dict[str, str] = {
+    "Мясо, птица и морепродукты": (
+        "fresh/chilled raw meat, poultry, fish, seafood, bacon, sausages & links "
+        "(Aidells, Kiolbassa, linguica, franks), salami, prosciutto, charcuterie, and packaged sliced deli meats "
+        "(sliced turkey, ham, roast beef)."
+    ),
+    "Овощи, фрукты и ягоды": (
+        "fresh produce, fruits, berries, vegetables, fresh herbs, salad mixes & kits, kimchi, living potted herbs."
+    ),
+    "Молочные продукты, сыр и яйца": (
+        "milk, cream, butter, sour cream, yogurt, cultured/probiotic dairy drinks (Cool Plus, kefir), "
+        "all cheeses, eggs."
+    ),
+    "Выпечка, хлеб и готовая еда (Deli)": (
+        "bread, buns, baguettes, croissants, tortillas, naan, pita, cakes, pastries, crepes/pancakes, "
+        "and fresh prepared Costco Service Deli / ready-to-eat chilled meals (rotisserie chicken, sushi, poke, "
+        "refrigerated ravioli/pasta, prepared entrées in sauce)."
+    ),
+    "Бакалея, масла, специи и консервы": (
+        "olive & cooking oils, vinegar, grains, rice, oats/granola/cereal, flour, sugar, yeast, dry pasta & "
+        "instant noodle bowls, sauces, mayonnaise, marinades, spices/seasonings/rubs, honey, jams/fruit spreads, "
+        "olives, sauerkraut, canned goods."
+    ),
+    "Заморозка и полуфабрикаты": (
+        "frozen foods — dumplings/potstickers/mandu, frozen burgers/patties, frozen meatballs, frozen snacks/"
+        "appetizers (flautas, spanakopita, takoyaki, pizza), frozen breaded or portioned fish/seafood "
+        "(frozen Mahi-Mahi, frozen seafood mix, tortilla-crusted tilapia), frozen vegetables/berries/fruit, ice cream."
+    ),
+    "Снеки, сладости, орехи и напитки": (
+        "chocolate, candy, cookies, crackers, chips, nuts, trail mix, dried & freeze-dried fruit, "
+        "protein/granola bars, non-alcoholic beverages (water, juice, soda, kombucha, energy drinks), "
+        "and coffee (whole bean, ground, K-Cup pods) & tea."
+    ),
+    "Бытовая химия, бумага и уборка": (
+        "laundry detergent, dish soap/pods, surface/oven/shoe cleaners, bath tissue/toilet paper, paper towels, "
+        "facial tissues, trash bags, disposable food storage bags (Ziploc), foil, parchment."
+    ),
+    "Здоровье, аптека, витамины и гигиена": (
+        "vitamins, supplements, OTC medications, toothpaste, mouthwash, dental floss, razors/cartridges, deodorant, "
+        "feminine care (pads, liners), shampoo, conditioner, body wash, skincare/creams/lotions, toner pads, "
+        "sunscreen, cosmetics, massagers."
+    ),
+    "Товары для дома, кухни и сада": (
+        "cookware, reusable food storage containers & lunch boxes (Pyrex, Bentgo), cabinet/cosmetic organizers, "
+        "storage drawers, hangers, home textiles, gift wrap & ribbon, garden planters & decorative floral "
+        "arrangements, folding carts/hand trucks, multi-tools & hardware."
+    ),
+    "Одежда и обувь": (
+        "men's, women's, and kids' apparel, underwear, socks, swimwear, shoes, gloves, hats/beanies, "
+        "sunglasses/eyewear, bags & backpacks."
+    ),
+    "Электроника и техника": (
+        "electronics, headphones, appliances, portable fans, chargers, cables, and batteries "
+        "(Duracell AA/AAA, rechargeable)."
+    ),
+    FUEL_CATEGORY: "gasoline, diesel, motor oil, automotive supplies.",
+    "Алкоголь": "wine, prosecco, champagne, beer, spirits, sangria.",
+    "Прочее": (
+        "bottle deposits (`CA REDEMP VAL` / CRV), liquor liter taxes (`LIQUOR LITER TAX`), standalone store coupons/"
+        "adjustments (`CPN`, `/123456`), gift cards, and items (such as toys/`LEGO` when no kids/toys category is "
+        "in `Allowed categories`) that do not fit any other allowed category."
+    ),
+}
+
+_CATEGORY_RULES_TEXT = "\n".join(
+    f"- **{en_label}**: {_DEFAULT_CATEGORY_SCOPES[cat_key]}"
+    for cat_key, en_label in DEFAULT_CATEGORY_LABELS_EN.items()
+)
+
 SYSTEM_INSTRUCTION = (
     "You are an expert on US retail products, item numbers, and receipt descriptions from Costco "
     "(in-warehouse receipts and online orders) and Safeway (item numbers prefixed with 'SWY-').\n"
-    "Your task is to decode abbreviated receipt descriptions (raw_description) into clean, accurate "
-    "English product names (clean_name) and classify each item strictly using the provided list of allowed categories."
+    "Your task is to decode abbreviated receipt descriptions (`raw_description`) into clean, accurate "
+    "English product names (`clean_name`) and classify each item strictly using the provided `Allowed categories`.\n\n"
+    "### 1. Rules for Decoding `clean_name` (in English)\n"
+    "- **Brand & retail abbreviations**:\n"
+    "  - Costco: `KS` = Kirkland Signature, `ORG`/`ORGNC`/`OG` = Organic, `EVOO` = Extra Virgin Olive Oil, "
+    "`CHKN`/`CKN`/`CHX` = Chicken, `BNLS/SL` or `BS` = Boneless Skinless, `BRST` = Breast, `GRND`/`GB` = Ground Beef, "
+    "`SSG` = Sausage, `VTY` = Variety Pack, `PK` = Pack, `CT` = ct, `#` = lb, `Z` = oz (or fl oz for liquids).\n"
+    "  - Safeway (`item_number` starts with `SWY-`): `O ORGNC` = O Organics, `SIGNATURE SELECT` = Signature SELECT, "
+    "`OPEN NATURE` = Open Nature, `LUCERNE` = Lucerne. If `raw_description` has the placeholder form "
+    "`Item name not found (<DEPT>)`, produce a clear generic department name (e.g., `Bakery Department Baked Goods`).\n"
+    "- **Strip Costco warehouse & pallet logistics codes**:\n"
+    "  - Completely ignore pallet, case, shelf-life, and promo codes from the second receipt description line: "
+    "`T6H6`, `10T4H`, `C12T6H4` (Tie/High/Case), `P=504`, `P120`, `P360/P300`, `FP576`, `HP288`, `LYR192` "
+    "(pallet count), `SL28`, `SL 18 DAYS` (shelf life), `DOM600`, `COO:CN`, `RW` (random weight), "
+    "`FY25`/`FY26`, `MVM`/`MVMP800`, `CSPC#`, `PLU`.\n"
+    "- **Distinguish Master Case counts from consumer packages**:\n"
+    "  - Patterns like `12/750ML` (wine), `16/2LB` (cheese), `12/46 OZ` (meatballs), or `8/50 OZ` (sauerkraut) at a "
+    "normal retail `sample_unit_price` mean 1 consumer unit (`(750 ml)`, `(2 lb)`, `(46 oz)`, `(50 oz)`), where the "
+    "leading number is the wholesale master case count. Never include the wholesale case count in `clean_name`.\n"
+    "  - When a master case wraps a consumer multi-pack (e.g., `18/2-16OZ` or `12-2/24 OZ`), include only the "
+    "consumer multi-pack: `(2 x 16 oz)`, `(2 x 24 oz)`.\n"
+    "- **Standardized weight, volume, and count format (in parentheses at the end of `clean_name`)**:\n"
+    "  - Solid items sold by weight: use singular `lb` or `oz` only (e.g., `(2 lb)`, `(12 oz)`). "
+    "When both metric and US units appear (`908 G / 2 LB`), keep only the US unit `(2 lb)`.\n"
+    "  - Solid multi-packs with per-unit weight: always format with `x` as `(N x M oz)` or `(N x M lb)` "
+    "(e.g., `6/2.6 OZ` -> `(6 x 2.6 oz)`, `4-8OZ` -> `(4 x 8 oz)`, `20CT/1.13Z` -> `(20 x 1.13 oz)`). "
+    "Do not use comma formatting such as `(20 ct, 1.13 oz)`.\n"
+    "  - **Liquids (beverages, water, juice, kombucha, milk, oils, sauces, liquid laundry detergent, shampoo, "
+    "body wash, lotion, mouthwash)**: always write volume in **`fl oz`**, **`ml`**, **`L`**, or **`gal`** "
+    "(e.g., `6/16.9 OZ` drink -> `(6 x 16.9 fl oz)`, `2/40.5 OZ` juice -> `(2 x 40.5 fl oz)`, "
+    "`194 OZ` liquid detergent -> `(194 fl oz)`), even if the receipt abbreviates it as `OZ` or `Z` "
+    "(downstream unit-price calculation uses `oz`/`lb` strictly for solid weight and ignores `fl oz`).\n"
+    "  - Count-only items without weight: `(N ct)` or `(N-Pack)` (e.g., `(72 ct)`, `(3-Pack)`).\n"
+    "- **No speculative slash-guessing (`/`)**:\n"
+    "  - Never output slash-separated guesses (e.g., do NOT write `Brand A / Brand B`, `Men's / Women's`, or "
+    "`Chocolate / Cheese`). Include a specific brand or flavor only when it is unambiguously supported by "
+    "`raw_description` and `item_number`; otherwise write a clean, factual product name.\n\n"
+    "### 2. Rules for Selecting `category`\n"
+    "- Return the exact `category` value from `Allowed categories` in the user prompt.\n"
+    "- **Custom user-defined categories take priority**: If `Allowed categories` includes custom categories beyond "
+    "the 15 defaults (e.g., `Kids`, `Toys`, `Pets`, `Baby`), always prefer a matching custom category over broad "
+    "defaults or `Other` (for example, `LEGO` or dolls go to a kids/toys category if present, and pet items go to a "
+    "pets category if present).\n"
+    "- Default category boundaries (shown by their `english_label`):\n"
+    f"{_CATEGORY_RULES_TEXT}\n\n"
+    "### 3. Output Completeness Requirements\n"
+    "- Return an entry for **every** item in the input list in the exact same order.\n"
+    "- The `item_number` field in the output must match the input `item_number` character-for-character "
+    "(keep prefixes such as `SWY-` and leading zeros)."
 )
+
+
+def _build_batch_schema(categories: list[str]) -> type[BaseModel]:
+    """Builds a batch response schema whose category field is an enum of the allowed categories."""
+    if not categories:
+        return CategorizedBatchSchema
+    category_enum = Enum("CategoryEnum", {f"CAT_{i}": c for i, c in enumerate(categories)}, type=str)
+    item_model = create_model(
+        "DynamicCategorizedItemSchema",
+        __base__=CategorizedItemSchema,
+        category=(
+            category_enum,
+            Field(description="Exact category value from the provided Allowed categories list"),
+        ),
+    )
+    return create_model(
+        "DynamicCategorizedBatchSchema",
+        __base__=CategorizedBatchSchema,
+        items=(list[item_model], ...),
+    )
 
 
 def _build_classification_prompt(
     items_payload: list[dict[str, Any]],
     categories: list[str],
+    category_labels_en: dict[str, str] | None = None,
 ) -> str:
-    """Builds the structured prompt for decoding and categorizing a batch of Costco/Safeway receipt items."""
+    """Builds the per-batch user prompt with the allowed categories and items to classify."""
+    labels_en = {**DEFAULT_CATEGORY_LABELS_EN, **(category_labels_en or {})}
+    allowed_entries: list[str | dict[str, str]] = [
+        {"category": c, "english_label": labels_en[c]} if c in labels_en and labels_en[c] != c else c
+        for c in categories
+    ]
     return (
-        "For every item in the input JSON list, decode `clean_name` and assign `category`.\n\n"
-        "### 1. Rules for Decoding `clean_name` (in English)\n"
-        "- **Brand & retail abbreviations**:\n"
-        "  - Costco: `KS` = Kirkland Signature, `ORG`/`ORGNC`/`OG` = Organic, `EVOO` = Extra Virgin Olive Oil, "
-        "`CHKN`/`CKN`/`CHX` = Chicken, `BNLS/SL` or `BS` = Boneless Skinless, `BRST` = Breast, `GRND`/`GB` = Ground Beef, "
-        "`SSG` = Sausage, `VTY` = Variety Pack, `PK` = Pack, `CT` = ct, `#` = lb, `Z` = oz (or fl oz for liquids).\n"
-        "  - Safeway (`item_number` starts with `SWY-`): `O ORGNC` = O Organics, `SIGNATURE SELECT` = Signature SELECT, "
-        "`OPEN NATURE` = Open Nature, `LUCERNE` = Lucerne. If `raw_description` has the placeholder form "
-        "`Item name not found (<DEPT>)`, produce a clear generic department name (e.g., `Bakery Department Baked Goods`).\n"
-        "- **Strip Costco warehouse & pallet logistics codes**:\n"
-        "  - Completely ignore pallet, case, shelf-life, and promo codes from the second receipt description line: "
-        "`T6H6`, `10T4H`, `C12T6H4` (Tie/High/Case), `P=504`, `P120`, `P360/P300`, `FP576`, `HP288`, `LYR192` (pallet count), "
-        "`SL28`, `SL 18 DAYS` (shelf life), `DOM600`, `COO:CN`, `RW` (random weight), `FY25`/`FY26`, `MVM`/`MVMP800`, `CSPC#`, `PLU`.\n"
-        "- **Distinguish Master Case counts from consumer packages**:\n"
-        "  - Patterns like `12/750ML` (wine), `16/2LB` (cheese), `12/46 OZ` (meatballs), or `8/50 OZ` (sauerkraut) at a normal "
-        "retail `sample_unit_price` mean 1 consumer unit (`(750 ml)`, `(2 lb)`, `(46 oz)`, `(50 oz)`), where the leading number "
-        "is the wholesale master case count. Never include the wholesale case count in `clean_name`.\n"
-        "  - When a master case wraps a consumer multi-pack (e.g., `18/2-16OZ` or `12-2/24 OZ`), include only the consumer "
-        "multi-pack: `(2 x 16 oz)`, `(2 x 24 oz)`.\n"
-        "- **Standardized weight, volume, and count format (in parentheses at the end of `clean_name`)**:\n"
-        "  - Solid items sold by weight: use singular `lb` or `oz` only (e.g., `(2 lb)`, `(12 oz)`). "
-        "When both metric and US units appear (`908 G / 2 LB`), keep only the US unit `(2 lb)`.\n"
-        "  - Solid multi-packs with per-unit weight: always format with `x` as `(N x M oz)` or `(N x M lb)` "
-        "(e.g., `6/2.6 OZ` -> `(6 x 2.6 oz)`, `4-8OZ` -> `(4 x 8 oz)`, `20CT/1.13Z` -> `(20 x 1.13 oz)`). "
-        "Do not use comma formatting such as `(20 ct, 1.13 oz)`.\n"
-        "  - **Liquids (beverages, water, juice, kombucha, milk, oils, sauces, liquid laundry detergent, shampoo, body wash, lotion, mouthwash)**: "
-        "always write volume in **`fl oz`**, **`ml`**, **`L`**, or **`gal`** (e.g., `6/16.9 OZ` drink -> `(6 x 16.9 fl oz)`, "
-        "`2/40.5 OZ` juice -> `(2 x 40.5 fl oz)`, `194 OZ` liquid detergent -> `(194 fl oz)`), even if the receipt abbreviates it as `OZ` or `Z` "
-        "(downstream unit-price calculation uses `oz`/`lb` strictly for solid weight and ignores `fl oz`).\n"
-        "  - Count-only items without weight: `(N ct)` or `(N-Pack)` (e.g., `(72 ct)`, `(3-Pack)`).\n"
-        "- **No speculative slash-guessing (`/`)**:\n"
-        "  - Never output slash-separated guesses (e.g., do NOT write `Brand A / Brand B`, `Men's / Women's`, or `Chocolate / Cheese`). "
-        "Include a specific brand or flavor only when it is unambiguously supported by `raw_description` and `item_number`; "
-        "otherwise write a clean, factual product name.\n\n"
-        "### 2. Rules for Selecting `category`\n"
-        "Select exactly one category string **verbatim** from the `Allowed categories` JSON list below (do not translate or alter the category string), following these boundaries:\n"
-        "- **Meat, poultry & seafood**: fresh/chilled raw meat, poultry, fish, seafood, bacon, sausages & links "
-        "(Aidells, Kiolbassa, linguica, franks), salami, prosciutto, charcuterie, and packaged sliced deli meats (sliced turkey, ham, roast beef).\n"
-        "- **Bakery, bread & prepared food (Deli)**: bread, buns, baguettes, croissants, tortillas, naan, pita, cakes, pastries, "
-        "crepes/pancakes, and fresh prepared Costco Service Deli / ready-to-eat chilled meals (rotisserie chicken, sushi, poke, "
-        "refrigerated ravioli/pasta, prepared entrées in sauce).\n"
-        "- **Frozen & ready meals**: frozen foods — dumplings/potstickers/mandu, frozen burgers/patties, frozen meatballs, "
-        "frozen snacks/appetizers (flautas, spanakopita, takoyaki, pizza), frozen breaded or portioned fish/seafood "
-        "(frozen Mahi-Mahi, frozen seafood mix, tortilla-crusted tilapia), frozen vegetables/berries/fruit, ice cream.\n"
-        "- **Fruits, vegetables & berries**: fresh produce, fruits, berries, vegetables, fresh herbs, salad mixes & kits, kimchi, living potted herbs.\n"
-        "- **Dairy, cheese & eggs**: milk, cream, butter, sour cream, yogurt, cultured/probiotic dairy drinks (Cool Plus, kefir), all cheeses, eggs.\n"
-        "- **Pantry, oils, spices & canned goods**: olive & cooking oils, vinegar, grains, rice, oats/granola/cereal, flour, sugar, "
-        "yeast, dry pasta & instant noodle bowls, sauces, mayonnaise, marinades, spices/seasonings/rubs, honey, jams/fruit spreads, olives, sauerkraut, canned goods.\n"
-        "- **Snacks, sweets, nuts & drinks**: chocolate, candy, cookies, crackers, chips, nuts, trail mix, dried & freeze-dried fruit, "
-        "protein/granola bars, non-alcoholic beverages (water, juice, soda, kombucha, energy drinks), and coffee (whole bean, ground, K-Cup pods) & tea.\n"
-        "- **Household, paper & cleaning**: laundry detergent, dish soap/pods, surface/oven/shoe cleaners, bath tissue/toilet paper, "
-        "paper towels, facial tissues, trash bags, disposable food storage bags (Ziploc), foil, parchment.\n"
-        "- **Health, pharmacy, vitamins & personal care**: vitamins, supplements, OTC medications, toothpaste, mouthwash, dental floss, "
-        "razors/cartridges, deodorant, feminine care (pads, liners), shampoo, conditioner, body wash, skincare/creams/lotions, toner pads, sunscreen, cosmetics, massagers.\n"
-        "- **Home, kitchen & garden**: cookware, reusable food storage containers & lunch boxes (Pyrex, Bentgo), cabinet/cosmetic organizers, "
-        "storage drawers, hangers, home textiles, gift wrap & ribbon, garden planters & decorative floral arrangements, folding carts/hand trucks, multi-tools & hardware.\n"
-        "- **Electronics & appliances**: electronics, headphones, appliances, portable fans, chargers, cables, and batteries (Duracell AA/AAA, rechargeable).\n"
-        "- **Clothing & shoes**: men's, women's, and kids' apparel, underwear, socks, swimwear, shoes, gloves, hats/beanies, sunglasses/eyewear, bags & backpacks.\n"
-        "- **Alcohol**: wine, prosecco, champagne, beer, spirits, sangria.\n"
-        "- **Auto & fuel (Gas Station)**: gasoline, diesel, motor oil, automotive supplies.\n"
-        "- **Other**: bottle deposits (`CA REDEMP VAL` / CRV), liquor liter taxes (`LIQUOR LITER TAX`), standalone store coupons/adjustments (`CPN`, `/123456`), "
-        "toys & building sets (`LEGO`, dolls), gift cards, and items that do not fit any other category.\n\n"
-        "### 3. Output Completeness Requirements\n"
-        "- Return an entry for **every** item in the input list in the exact same order.\n"
-        "- The `item_number` field in the output must match the input `item_number` character-for-character.\n\n"
-        "Allowed categories:\n"
-        f"{json.dumps(categories, ensure_ascii=False, indent=2)}\n\n"
+        "Allowed categories (set `category` to the exact `category` value):\n"
+        f"{json.dumps(allowed_entries, ensure_ascii=False, indent=2)}\n\n"
         "Items to decode and categorize:\n"
         f"{json.dumps(items_payload, ensure_ascii=False, indent=2)}"
     )
@@ -277,14 +359,17 @@ def fallback_categorize_item(item_number: str, raw_description: str) -> dict[str
 
 
 def _loose_item_key(item_number: str) -> str:
-    """Item number without spaces and leading zeros; "000" stays "0", an empty one stays empty."""
+    """Item number without spaces, 'SWY-' prefix, and leading zeros; '000' stays '0', empty stays empty."""
     trimmed = item_number.strip()
+    without_prefix = re.sub(r"^SWY(?=[-\s_\d])[-\s_]*", "", trimmed, flags=re.IGNORECASE).strip()
+    if without_prefix:
+        trimmed = without_prefix
     return trimmed.lstrip("0") or ("0" if trimmed else "")
 
 
 class GeminiItemClassifier:
     """
-    Costco item classifier.
+    Costco and Safeway item classifier.
     The first time an Item # appears, sends it to the Gemini API for decoding and categorization
     and stores the result in the local SQLite database.
     """
@@ -337,7 +422,7 @@ class GeminiItemClassifier:
         categories: list[str],
         api_key: str,
     ) -> list[dict[str, str]]:
-        """Calls the Google GenAI SDK with a strict JSON schema for a batch of Costco item numbers."""
+        """Calls the Google GenAI SDK with a strict JSON schema for a batch of item numbers."""
         from google import genai
         from google.genai import types
 
@@ -357,7 +442,9 @@ class GeminiItemClassifier:
             for i in batch
         ]
 
-        prompt = _build_classification_prompt(items_payload, categories)
+        custom_labels_en = self.db.get_category_labels_en()
+        prompt = _build_classification_prompt(items_payload, categories, custom_labels_en)
+        batch_schema = _build_batch_schema(categories)
 
         response = client.models.generate_content(
             model=model_name,
@@ -365,19 +452,29 @@ class GeminiItemClassifier:
             config=types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION,
                 response_mime_type="application/json",
-                response_schema=CategorizedBatchSchema,
+                response_schema=batch_schema,
                 temperature=0.1,
             ),
         )
 
         parsed_data = json.loads(response.text)
         raw_map = {str(i["item_number"]): str(i.get("raw_description", "")) for i in batch}
-        # Gemini may return an item number with leading zeros or spaces; map it back to the original.
-        # Only unambiguous keys: if "0123" and "123" are both in the batch, neither is matched loosely
+        # Gemini may return an item number with leading zeros, spaces, or without the 'SWY-' prefix;
+        # map it back to the original. Only unambiguous keys: if "0123" and "123" are both in the batch,
+        # neither is matched loosely
         loose_candidates: dict[str, list[str]] = {}
         for k in raw_map:
             loose_candidates.setdefault(_loose_item_key(k), []).append(k)
         loose_map = {key: keys[0] for key, keys in loose_candidates.items() if key and len(keys) == 1}
+
+        # Map both canonical category names and their English labels back to the canonical DB category
+        labels_en = {**DEFAULT_CATEGORY_LABELS_EN, **custom_labels_en}
+        category_lookup: dict[str, str] = {}
+        for c in categories:
+            if c in labels_en and labels_en[c]:
+                category_lookup[labels_en[c].casefold()] = c
+            category_lookup[c.casefold()] = c
+
         results: list[dict[str, str]] = []
 
         for entry in parsed_data.get("items", []):
@@ -388,8 +485,10 @@ class GeminiItemClassifier:
                 # the batch item stays pending and goes into the next classification run
                 logger.warning("Gemini вернул артикул не из пакета: %r", returned)
                 continue
-            cat = str(entry.get("category", "Прочее")).strip()
-            if cat not in categories:
+            raw_cat = str(entry.get("category", "")).strip()
+            cat = raw_cat if raw_cat in categories else category_lookup.get(raw_cat.casefold())
+            if not cat:
+                logger.warning("Gemini вернул неизвестную категорию %r для артикула %s", raw_cat, inum)
                 cat = "Прочее"
             results.append(
                 {

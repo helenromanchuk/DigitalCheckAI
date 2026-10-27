@@ -3,6 +3,7 @@ target-version = "py314"
 line-length = 120
 
 [tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "W", "I", "UP", "B", "BLE", "PIE", "S110"]
 ignore = [
     "BLE001", # broad excepts are deliberate: Gemini fallback, best-effort browser cleanup
     "S110",   # try/except/pass on context.close() is intentional

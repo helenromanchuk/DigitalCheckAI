@@ -18,23 +18,25 @@ IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 FUEL_CATEGORY = "Авто и заправка (Gas Station)"
 
-DEFAULT_CATEGORIES: list[str] = [
-    "Мясо, птица и морепродукты",
-    "Овощи, фрукты и ягоды",
-    "Молочные продукты, сыр и яйца",
-    "Выпечка, хлеб и готовая еда (Deli)",
-    "Бакалея, масла, специи и консервы",
-    "Заморозка и полуфабрикаты",
-    "Снеки, сладости, орехи и напитки",
-    "Бытовая химия, бумага и уборка",
-    "Здоровье, аптека, витамины и гигиена",
-    "Товары для дома, кухни и сада",
-    "Одежда и обувь",
-    "Электроника и техника",
-    FUEL_CATEGORY,
-    "Алкоголь",
-    "Прочее",
-]
+DEFAULT_CATEGORY_LABELS_EN: dict[str, str] = {
+    "Мясо, птица и морепродукты": "Meat, poultry & seafood",
+    "Овощи, фрукты и ягоды": "Fruits, vegetables & berries",
+    "Молочные продукты, сыр и яйца": "Dairy, cheese & eggs",
+    "Выпечка, хлеб и готовая еда (Deli)": "Bakery, bread & prepared food (Deli)",
+    "Бакалея, масла, специи и консервы": "Pantry, oils, spices & canned goods",
+    "Заморозка и полуфабрикаты": "Frozen & ready meals",
+    "Снеки, сладости, орехи и напитки": "Snacks, sweets, nuts & drinks",
+    "Бытовая химия, бумага и уборка": "Household, paper & cleaning",
+    "Здоровье, аптека, витамины и гигиена": "Health, pharmacy, vitamins & personal care",
+    "Товары для дома, кухни и сада": "Home, kitchen & garden",
+    "Одежда и обувь": "Clothing & shoes",
+    "Электроника и техника": "Electronics & appliances",
+    FUEL_CATEGORY: "Auto & fuel (Gas Station)",
+    "Алкоголь": "Alcohol",
+    "Прочее": "Other",
+}
+
+DEFAULT_CATEGORIES: list[str] = list(DEFAULT_CATEGORY_LABELS_EN)
 
 
 def get_gemini_api_key() -> str:
