@@ -29,8 +29,8 @@ def crv_owners(items: list[dict[str, Any]]) -> dict[int, int]:
     """Maps the index of each CRV line to the index of the receipt line it belongs to, from the line descriptions.
 
     The owner is the nearest earlier line with the linked item number that has no CRV yet ("wine, wine, CRV, CRV"
-    gives each bottle one deposit), else the nearest earlier one, else the first later one; a CRV line whose item
-    isn't on the receipt has no owner. Lines whose amount has the CRV's sign come first, so a refunded deposit
+    gives each bottle one deposit), else the first later one without a CRV, else the nearest line of the item;
+    a CRV line whose item isn't on the receipt has no owner. Lines whose amount has the CRV's sign come first, so a refunded deposit
     goes to the returned bottle and not to the purchase.
     """
     links = {i: link for i, row in enumerate(items) if (link := _crv_link(row.get("raw_description")))}
@@ -48,9 +48,16 @@ def crv_owners(items: list[dict[str, Any]]) -> dict[int, int]:
         refund = float(items[index].get("net_amount") or 0.0) < 0
         same_sign = [i for i in candidates if (float(items[i].get("net_amount") or 0.0) < 0) == refund]
         candidates = same_sign or candidates
-        earlier = candidates[: bisect_left(candidates, index)]
-        free = [i for i in earlier if i not in claimed]
-        owner = free[-1] if free else earlier[-1] if earlier else candidates[0]
+        split_at = bisect_left(candidates, index)
+        free_earlier = [i for i in candidates[:split_at] if i not in claimed]
+        free_later = [i for i in candidates[split_at:] if i not in claimed]
+        if free_earlier:
+            owner = free_earlier[-1]
+        elif free_later:
+            owner = free_later[0]
+        else:
+            # More deposits than bottles: stack the extra one on the nearest bottle
+            owner = candidates[split_at - 1] if split_at else candidates[0]
         owners[index] = owner
         claimed.add(owner)
     return owners
@@ -84,7 +91,10 @@ def add_tax_and_crv(items: list[dict[str, Any]], receipt_tax: float) -> list[dic
     crv = {i: 0.0 for i in kept}
     taxable_base = {i: 0.0 for i in kept}
     for index in kept:
-        if str(rows[index].get("tax_flag") or "").upper() == "Y":
+        # A deposit whose item isn't on the receipt stays a line of its own, taxed by the T/N in its description
+        link = _crv_link(rows[index].get("raw_description"))
+        taxable = link[1] if link else str(rows[index].get("tax_flag") or "").upper() == "Y"
+        if taxable:
             taxable_base[index] += float(rows[index].get("net_amount") or 0.0)
     for crv_index, owner in owners.items():
         amount = float(rows[crv_index].get("net_amount") or 0.0)

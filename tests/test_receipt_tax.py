@@ -331,3 +331,27 @@ def test_online_line_keeps_its_own_tax_flag():
         ],
     }
     assert [i["tax_flag"] for i in parse_online_order(order)["items"]] == ["Y", "N"]
+
+
+def test_a_bottle_already_given_a_deposit_lets_the_next_deposit_go_to_a_later_bottle():
+    items = [
+        _item("919140", "MILESTONE", 6.99, "Y"),
+        _item("1254", "CA REDEMP VAL T EI/919140", 0.10),
+        _item("1254", "CA REDEMP VAL T EI/919140", 0.10),
+        _item("919140", "MILESTONE", 6.99, "Y"),
+    ]
+    assert crv_owners(items) == {1: 0, 2: 3}
+    deposits_first = [
+        _item("1254", "CA REDEMP VAL T EI/919140", 0.10),
+        _item("1254", "CA REDEMP VAL T EI/919140", 0.10),
+        _item("919140", "MILESTONE", 6.99, "Y"),
+        _item("919140", "MILESTONE", 6.99, "Y"),
+    ]
+    assert sorted(crv_owners(deposits_first).values()) == [2, 3]
+
+
+def test_orphan_deposit_is_taxed_by_its_description():
+    items = [_item("1", "SOAP", 10.0, "Y"), _item("5235", "CA REDEMP VAL N EE/111", 2.50, "Y")]
+    soap, deposit = add_tax_and_crv(items, 1.0)
+    assert soap["tax_amount"] == 1.0
+    assert deposit["tax_amount"] is None
