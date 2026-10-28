@@ -12,18 +12,31 @@ from app.money import allocate_cents
 
 # Version of the rules below. The split is stored with each receipt (receipts.tax_split_version), and receipts
 # split by other rules are split again on startup, so bump this whenever a change here alters any result
-SPLIT_RULES_VERSION = 5
+SPLIT_RULES_VERSION = 6
 
 # A California bottle deposit (CRV) line: "CA REDEMP VAL T EI/919140" is the deposit for item 919140; "T" means
 # the deposit itself is taxed, "N" that it isn't. Truncated wordings ("CA REDEMP VA"), a marker glued to the
-# word "VAL" or to the code ("VALT", "TEI/"), an item number after a space instead of "/" and text after the item
-# number are allowed; the marker and the item number may be missing. A letter glued to "VA" ("VAN") is part of a word, not a marker
+# word "VAL" or to the code ("VALT", "TEI/") is allowed; the marker may be missing. A letter glued to "VA"
+# ("VAN") is part of a word, not a marker. The item number is read from the rest (see _crv_item_number)
 _CRV_RE = re.compile(
     r"^CA\s+REDEMP(?:TION)?\s+VA(?:LUE|L)?"
-    r"(?:(?:\s+([TN])|(?<=L)([TN]))(?:\s*E[A-Z])?(?=[\s/]|$)|\b)"
-    r"[^/\d]*(?:/\s*)?(\d+)?\b",
+    r"(?:(?:\s+([TN])|(?<=L)([TN]))(?:\s*E[A-Z])?(?=[\s/]|$)|\b)",
     re.IGNORECASE,
 )
+_LEADING_DIGITS_RE = re.compile(r"\s*(\d+)")
+
+
+def _crv_item_number(rest: str) -> str | None:
+    """The item number a deposit is for, from the text after its marker.
+
+    It follows the last "/" ("EI/919140", "24PK/919140 CRV"), or, without a "/", it is the last token made of
+    digits only ("EI 919140", "12PK 919140"); pack sizes like "24PK" aren't item numbers.
+    """
+    if "/" in rest:
+        match = _LEADING_DIGITS_RE.match(rest.rsplit("/", 1)[1])
+        return match.group(1) if match else None
+    numbers = [token for token in rest.split() if token.isdigit()]
+    return numbers[-1] if numbers else None
 
 # California sales tax tops out around 11%; a higher implied rate means the taxable lines nearly cancel out
 # (a purchase and a return on one receipt), and splitting the tax over them would give absurd shares
@@ -32,11 +45,12 @@ MAX_TAX_RATE = 0.15
 
 def _crv_info(raw_description: str | None) -> tuple[str | None, bool | None] | None:
     """For a CRV line: the item number it is for and whether it is taxed (None when not stated); else None."""
-    match = _CRV_RE.match((raw_description or "").strip())
+    description = (raw_description or "").strip()
+    match = _CRV_RE.match(description)
     if not match:
         return None
     marker = match.group(1) or match.group(2)
-    return match.group(3), (marker.upper() == "T") if marker else None
+    return _crv_item_number(description[match.end():]), (marker.upper() == "T") if marker else None
 
 
 def is_crv_line(raw_description: str | None) -> bool:

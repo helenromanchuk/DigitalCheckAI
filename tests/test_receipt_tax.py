@@ -773,7 +773,7 @@ def test_coupon_with_leading_zeros_attaches_to_its_sale():
     assert wine["net_amount"] == 16.0
 
 
-def test_orphan_deposits_are_not_counted_as_unique_items(tmp_path):
+def test_orphan_deposits_count_as_the_items_tab_lists_them(tmp_path):
     from app.database import Database
 
     db = Database(tmp_path / "unique.db")
@@ -793,7 +793,8 @@ def test_orphan_deposits_are_not_counted_as_unique_items(tmp_path):
         ]
     )
     (other,) = db.get_statistics()["by_category"]
-    assert (other["line_count"], other["unique_items"]) == (0, 0)
+    # Listed in the Items tab as one CRV row bought twice
+    assert (other["line_count"], other["unique_items"]) == (2, 1)
 
 
 
@@ -878,3 +879,49 @@ def test_old_single_item_online_order_with_a_fee_loses_its_flag(tmp_path):
     db.init_db()
     (lamp,) = db.get_receipts_list()[0]["items"]
     assert lamp["tax_amount"] is None and lamp["tax_unsplit"] is True
+
+
+
+def test_pack_size_before_the_item_number_is_skipped():
+    for description in ("CA REDEMP VAL 24PK/919140", "CA REDEMP VA 12PK 919140", "CA REDEMP VAL T EI/919140 CRV"):
+        items = [_item("919140", "MILESTONE", 4.99, "Y"), _item("1254", description, 0.10)]
+        assert crv_owners(items) == {1: 0}, description
+
+
+def test_order_discount_never_reduces_a_deposit():
+    from app.scraper.parser import parse_online_order
+
+    order = {
+        "orderNumber": "1265539000",
+        "orderPlacedDate": "2026-02-25T09:41:21",
+        "orderTax": 0.0,
+        "discountAmount": 5.0,
+        "orderLineItems": [
+            {"itemNumber": "919140", "itemDescription": "WINE", "quantity": 1, "merchandiseTotal": 45.0},
+            {"itemNumber": "1254", "itemDescription": "CA REDEMP VAL T EI/919140", "quantity": 1, "merchandiseTotal": 5.0},
+        ],
+    }
+    wine, crv = parse_online_order(order)["items"]
+    assert (wine["net_amount"], crv["net_amount"]) == (40.0, 5.0)
+
+
+def test_orphan_deposit_counts_as_a_listed_line_in_the_stats(tmp_path):
+    from app.database import Database
+
+    db = Database(tmp_path / "orphan_stats.db")
+    db.init_db()
+    db.upsert_receipts(
+        [
+            {
+                "transaction_barcode": "1016",
+                "transaction_date": "2026-06-16",
+                "receipt_type": "warehouse",
+                "tax": 0.0,
+                "items": [{"item_number": "1254", "raw_description": "CA REDEMP VAL N EE/123", "net_amount": 0.3, "gross_amount": 0.3}],
+            }
+        ]
+    )
+    (other,) = db.get_statistics()["by_category"]
+    assert (other["line_count"], other["unique_items"], other["net_spent"]) == (1, 1, 0.3)
+    (row,) = db.get_items_summary()
+    assert row["is_deposit"] is True

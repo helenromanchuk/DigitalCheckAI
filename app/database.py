@@ -187,8 +187,9 @@ class Database:
                 WHERE r.receipt_type = 'online'
                 GROUP BY ri.transaction_barcode
                 HAVING MIN(ri.tax_flag) = 'Y' AND MAX(ri.tax_flag) = 'Y'
-                   -- Several items, or one with fees or shipping (the total is more than items plus tax)
-                   AND (COUNT(*) > 1 OR ROUND(MAX(r.total - r.subtotal - r.tax), 2) > 0)
+                   -- Several items, or one with fees or shipping: the total is more than what the lines
+                   -- (after discounts) and the tax add up to
+                   AND (COUNT(*) > 1 OR ROUND(MAX(r.total) - MAX(r.tax) - SUM(ri.net_amount), 2) > 0)
             """
             with self.connect() as conn:
                 conn.execute(
@@ -879,8 +880,9 @@ class Database:
                 f"""
                 SELECT
                     c.category AS category,
-                    COUNT(CASE WHEN ri.is_deposit = 0 THEN ri.id END) AS line_count,
-                    COUNT(DISTINCT CASE WHEN ri.is_deposit = 0 THEN ri.item_number END) AS unique_items,
+                    -- Lines and items as the Items tab lists them: a deposit folded into its bottle isn't one
+                    COUNT(CASE WHEN ri.crv_owner_id IS NULL THEN ri.id END) AS line_count,
+                    COUNT(DISTINCT CASE WHEN ri.crv_owner_id IS NULL THEN ri.item_number END) AS unique_items,
                     ROUND(COALESCE(SUM(ri.gross_amount), 0.0), 2) AS gross_spent,
                     ROUND(COALESCE(SUM(ri.discount_amount), 0.0), 2) AS discount_saved,
                     ROUND(COALESCE(SUM(ri.net_amount), 0.0), 2) AS net_spent
@@ -1011,6 +1013,7 @@ class Database:
                     ROUND(COALESCE(SUM(ri.tax_amount), 0.0) + COALESCE(SUM(ri.crv_amount), 0.0), 2) AS tax_crv,
                     MAX(COALESCE(ri.tax_unsplit, 0)) AS tax_partial,
                     MIN(COALESCE(ri.tax_unsplit, 0)) AS tax_unknown,
+                    MIN(ri.is_deposit) AS is_deposit,
                     MAX(substr(r.transaction_date, 1, 10)) AS last_purchased
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
@@ -1028,6 +1031,8 @@ class Database:
             # them could be split there is no total with tax at all
             item["tax_partial"] = bool(item["tax_partial"])
             item["tax_unknown"] = bool(item["tax_unknown"])
+            # A row of deposits whose bottles aren't on their receipts: its money is all under Tax/CRV
+            item["is_deposit"] = bool(item["is_deposit"])
             result.append(item)
         return result
 
@@ -1056,7 +1061,8 @@ class Database:
                     ri.gross_amount,
                     ri.discount_amount,
                     ri.net_amount,
-                    ri.is_deposit
+                    ri.is_deposit,
+                    ri.crv_amount
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
                 JOIN item_catalog c ON c.item_number = ri.item_number

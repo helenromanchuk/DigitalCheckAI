@@ -80,10 +80,10 @@ def _is_discount_row(raw_item: dict[str, Any]) -> tuple[bool, str | None]:
 def spread_discount(items: list[dict[str, Any]], amount: float, base_key: str) -> float:
     """
     Spreads a receipt- or order-level discount across items with a positive base_key amount,
-    in proportion to it, and returns the amount allocated. The last item gets the remainder
-    so rounding cents aren't lost.
+    in proportion to it, and returns the amount allocated. Shares are whole cents that add up to
+    the amount (see allocate_cents). A bottle deposit isn't merchandise, so it is never discounted.
     """
-    allocatable = [i for i in items if i[base_key] > 0]
+    allocatable = [i for i in items if i[base_key] > 0 and not i.get("is_crv")]
     base = sum(i[base_key] for i in allocatable)
     if amount <= 0 or base <= 0:
         return 0.0

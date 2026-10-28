@@ -239,8 +239,9 @@ function renderPurchaseSearch(data, query) {
     return;
   }
 
+  // Totals are product spend: a deposit on its own isn't counted, as in the Items tab's Net
   const totalGross = rows.reduce((sum, r) => sum + (r.is_deposit ? 0 : r.gross_amount), 0);
-  const totalNet = rows.reduce((sum, r) => sum + r.net_amount, 0);
+  const totalNet = rows.reduce((sum, r) => sum + (r.is_deposit ? 0 : r.net_amount), 0);
   const stores = [...new Set(rows.map(r => STORE_LABELS[r.store] || r.store))].join(", ");
   summary.textContent = t("search.summary", {
     count: rows.length,
@@ -272,7 +273,7 @@ function renderPurchaseSearch(data, query) {
         </td>
         <td class="px-3 py-2 text-right text-slate-600">${r.quantity}</td>
         <td class="px-3 py-2 text-right text-slate-500">${r.is_deposit ? "—" : hasDiscount ? `<s>${formatMoney(r.gross_amount)}</s>` : formatMoney(r.gross_amount)}</td>
-        <td class="px-3 py-2 text-right font-bold ${hasDiscount ? "text-emerald-700" : "text-slate-900"}">${formatMoney(r.net_amount)}${r.is_deposit ? ` <span class="text-[10px] font-normal text-slate-400">CRV</span>` : unitNet}</td>
+        <td class="px-3 py-2 text-right font-bold ${hasDiscount ? "text-emerald-700" : "text-slate-900"}">${formatMoney(r.net_amount)}${r.is_deposit ? ` <span class="text-[10px] font-normal text-slate-400">CRV</span>` : unitNet}${!r.is_deposit && r.crv_amount ? `<div class="text-[10px] font-normal text-slate-400">${escapeHtml(t("receipts.itemCrv", { amount: formatMoney(r.crv_amount) }))}</div>` : ""}</td>
         <td class="px-3 py-2 text-right text-slate-700">${formatUnitPrice(r.price_per_lb)}</td>
         <td class="px-3 py-2 text-right text-slate-700">${formatUnitPrice(r.price_per_oz)}</td>
       </tr>`;
@@ -636,9 +637,9 @@ function renderItemsTable(data) {
           class="w-full resize-none overflow-hidden bg-transparent border border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white rounded px-1.5 py-0.5 text-slate-900 font-medium leading-snug focus:outline-none">${escapeHtml(item.clean_name)}</textarea>
       </td>
       <td class="px-3 py-2.5 text-right text-slate-600">${item.total_quantity}</td>
-      <td class="px-3 py-2.5 text-right text-slate-500">${item.discount_saved > 0 ? `<s>${formatMoney(item.gross_spent)}</s>` : formatMoney(item.gross_spent)}</td>
-      <td class="px-3 py-2.5 text-right text-emerald-600">${item.discount_saved > 0 ? "-" + formatMoney(item.discount_saved) : "—"}</td>
-      <td class="px-3 py-2.5 text-right font-bold text-slate-900">${formatMoney(item.net_spent)}</td>
+      <td class="px-3 py-2.5 text-right text-slate-500">${item.is_deposit ? "—" : item.discount_saved > 0 ? `<s>${formatMoney(item.gross_spent)}</s>` : formatMoney(item.gross_spent)}</td>
+      <td class="px-3 py-2.5 text-right text-emerald-600">${!item.is_deposit && item.discount_saved > 0 ? "-" + formatMoney(item.discount_saved) : "—"}</td>
+      <td class="px-3 py-2.5 text-right font-bold text-slate-900">${item.is_deposit ? "—" : formatMoney(item.net_spent)}</td>
       ${taxCrvCell(item, "px-3 py-2.5")}
       <td class="px-3 py-2.5 text-right font-bold text-slate-900" title="${escapeHtml(item.tax_unknown ? t("total.taxNotSplit") : item.tax_partial ? t("total.taxPartial") : "")}">${item.tax_unknown ? "—" : formatMoney(item.net_spent + item.tax_crv) + (item.tax_partial ? "*" : "")}</td>
       <td class="px-3 py-2.5 text-right text-slate-700">${formatUnitPrice(item.price_per_lb)}</td>
