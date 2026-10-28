@@ -392,6 +392,9 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
                 "tax_flag": str(line.get("taxFlag") or line.get("tax_flag") or ""),
             }
         )
+        if is_crv_line(desc):
+            # As on warehouse receipts: the deposit takes its bottle's category and isn't sent to Gemini
+            _mark_crv(normalized_items[-1])
 
     # getOrderDetails has no per-line tax flag, only the order's tax. With a single item that tax is all its own;
     # with several it can't be told which are taxable (groceries aren't), so the tax isn't split per item.

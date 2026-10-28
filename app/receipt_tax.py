@@ -12,16 +12,16 @@ from app.money import allocate_cents
 
 # Version of the rules below. The split is stored with each receipt (receipts.tax_split_version), and receipts
 # split by other rules are split again on startup, so bump this whenever a change here alters any result
-SPLIT_RULES_VERSION = 4
+SPLIT_RULES_VERSION = 5
 
 # A California bottle deposit (CRV) line: "CA REDEMP VAL T EI/919140" is the deposit for item 919140; "T" means
 # the deposit itself is taxed, "N" that it isn't. Truncated wordings ("CA REDEMP VA"), a marker glued to the
-# word "VAL" or to the code ("VALT", "TEI/") and text after the item number are allowed; the marker and the item
-# number may be missing. A letter glued to "VA" ("VAN") is part of a word, not a marker
+# word "VAL" or to the code ("VALT", "TEI/"), an item number after a space instead of "/" and text after the item
+# number are allowed; the marker and the item number may be missing. A letter glued to "VA" ("VAN") is part of a word, not a marker
 _CRV_RE = re.compile(
     r"^CA\s+REDEMP(?:TION)?\s+VA(?:LUE|L)?"
     r"(?:(?:\s+([TN])|(?<=L)([TN]))(?:\s*E[A-Z])?(?=[\s/]|$)|\b)"
-    r"[^/]*(?:/\s*(\d+)\b)?",
+    r"[^/\d]*(?:/\s*)?(\d+)?\b",
     re.IGNORECASE,
 )
 

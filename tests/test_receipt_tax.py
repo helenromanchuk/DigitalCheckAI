@@ -718,8 +718,10 @@ def test_orphan_deposit_and_items_with_no_split_tax_in_the_views(tmp_path):
     listed = {i["item_number"]: i for i in db.get_items_summary()}
     assert listed["SWY-1"]["tax_unknown"] is True
     # The deposit whose bottle is elsewhere keeps its money in view: under Tax/CRV, not Net
-    assert (listed["1254"]["net_spent"], listed["1254"]["crv_amount"]) == (0.0, 0.1)
-    assert db.search_purchases("REDEMP") == []
+    assert (listed["1254"]["net_spent"], listed["1254"]["crv_amount"], listed["1254"]["total_quantity"]) == (0.0, 0.1, 0.0)
+    # Search finds it too, marked as a deposit
+    (found,) = db.search_purchases("REDEMP")
+    assert found["is_deposit"] == 1
 
 
 def test_catalog_rows_of_unparseable_receipts_get_the_crv_category(tmp_path):
@@ -823,3 +825,56 @@ def test_blank_catalog_categories_move_to_other(tmp_path):
     db.init_db()
     with db.connect() as conn:
         assert conn.execute("SELECT category FROM item_catalog WHERE item_number = '919140'").fetchone()[0] == "Other"
+
+
+
+def test_item_number_after_a_space_links_the_deposit():
+    items = [_item("919140", "MILESTONE", 4.99, "Y"), _item("1254", "CA REDEMP VAL N EI 919140", 0.10)]
+    assert crv_owners(items) == {1: 0}
+    assert is_crv_line("CA REDEMPTION VALUE")
+
+
+def test_online_crv_line_gets_the_parser_category():
+    from app.scraper.parser import CRV_NAME, parse_online_order
+
+    order = {
+        "orderNumber": "1265538999",
+        "orderPlacedDate": "2026-02-24T09:41:21",
+        "orderTax": 0.0,
+        "orderLineItems": [
+            {"itemNumber": "919140", "itemDescription": "MILESTONE", "quantity": 1, "merchandiseTotal": 4.99},
+            {"itemNumber": "1254", "itemDescription": "CA REDEMP VAL T EI/919140", "quantity": 1, "merchandiseTotal": 0.1},
+        ],
+    }
+    crv = parse_online_order(order)["items"][1]
+    assert crv["default_clean_name"] == CRV_NAME
+
+
+def test_old_single_item_online_order_with_a_fee_loses_its_flag(tmp_path):
+    import sqlite3
+
+    from app.database import ENGLISH_NAMES_SCHEMA_VERSION, Database
+
+    path = tmp_path / "fee.db"
+    db = Database(path)
+    db.init_db()
+    db.upsert_receipts(
+        [
+            {
+                "transaction_barcode": "ONL-3",
+                "transaction_date": "2026-02-20",
+                "receipt_type": "online",
+                "subtotal": 10.0,
+                "tax": 1.0,
+                "total": 21.0,
+                "items": [{"item_number": "1", "raw_description": "LAMP", "net_amount": 10.0, "gross_amount": 10.0, "tax_flag": "Y"}],
+            }
+        ]
+    )
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE receipts SET raw_json = '{}'")
+        conn.execute(f"PRAGMA user_version = {ENGLISH_NAMES_SCHEMA_VERSION}")
+
+    db.init_db()
+    (lamp,) = db.get_receipts_list()[0]["items"]
+    assert lamp["tax_amount"] is None and lamp["tax_unsplit"] is True

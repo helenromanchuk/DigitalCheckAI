@@ -186,7 +186,9 @@ class Database:
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
                 WHERE r.receipt_type = 'online'
                 GROUP BY ri.transaction_barcode
-                HAVING COUNT(*) > 1 AND MIN(ri.tax_flag) = 'Y' AND MAX(ri.tax_flag) = 'Y'
+                HAVING MIN(ri.tax_flag) = 'Y' AND MAX(ri.tax_flag) = 'Y'
+                   -- Several items, or one with fees or shipping (the total is more than items plus tax)
+                   AND (COUNT(*) > 1 OR ROUND(MAX(r.total - r.subtotal - r.tax), 2) > 0)
             """
             with self.connect() as conn:
                 conn.execute(
@@ -232,15 +234,24 @@ class Database:
             "SELECT item_number, raw_description FROM item_catalog "
             "WHERE is_manual_override = 0 AND classified_by != 'parser' AND LTRIM(raw_description) LIKE 'CA REDEMP%'"
         ).fetchall()
-        now = datetime.now(UTC).isoformat()
-        conn.executemany(
+        for row in rows:
+            if is_crv_line(row["raw_description"]):
+                Database._take_parser_category(conn, row["item_number"], CRV_NAME, OTHER_CATEGORY)
+
+    @staticmethod
+    def _take_parser_category(conn: sqlite3.Connection, item_number: str, clean_name: str, category: str) -> None:
+        """Gives a catalog row the parser's category so the classifier can't move it again.
+
+        A name decoded by Gemini is kept: it reads better than the parser's template.
+        """
+        conn.execute(
             """
             UPDATE item_catalog
             SET clean_name = CASE WHEN classified_by = 'gemini' THEN clean_name ELSE ? END,
                 category = ?, classified_by = 'parser', updated_at = ?
             WHERE item_number = ?
             """,
-            [(CRV_NAME, OTHER_CATEGORY, now, row["item_number"]) for row in rows if is_crv_line(row["raw_description"])],
+            (clean_name, category, datetime.now(UTC).isoformat(), item_number),
         )
 
     @classmethod
@@ -737,17 +748,9 @@ class Database:
                         and not cat_row["is_manual_override"]
                         and cat_row["classified_by"] != "parser"
                     ):
-                        # The row was created before the parser knew its category (e.g. fuel saved as pending):
-                        # take the parser's category so the classifier can't move it again. A name decoded
-                        # by Gemini is kept: it reads better than the parser's template
-                        conn.execute(
-                            """
-                            UPDATE item_catalog
-                            SET clean_name = CASE WHEN classified_by = 'gemini' THEN clean_name ELSE ? END,
-                                category = ?, classified_by = 'parser', updated_at = ?
-                            WHERE item_number = ?
-                            """,
-                            (line.get("default_clean_name") or raw_desc, line["default_category"], now, item_num),
+                        # The row was created before the parser knew its category (e.g. fuel saved as pending)
+                        self._take_parser_category(
+                            conn, item_num, line.get("default_clean_name") or raw_desc, line["default_category"]
                         )
                     elif (
                         not line.get("default_category")
@@ -998,7 +1001,7 @@ class Database:
                     c.image_file,
                     MAX(ri.is_weight) AS is_weight,
                     COUNT(ri.id) AS purchase_count,
-                    ROUND(COALESCE(SUM(ri.quantity), 0.0), 2) AS total_quantity,
+                    ROUND(COALESCE(SUM(CASE WHEN ri.is_deposit = 0 THEN ri.quantity END), 0.0), 2) AS total_quantity,
                     ROUND(COALESCE(SUM(CASE WHEN ri.is_deposit = 0 THEN ri.gross_amount END), 0.0), 2) AS gross_spent,
                     ROUND(COALESCE(SUM(CASE WHEN ri.is_deposit = 0 THEN ri.discount_amount END), 0.0), 2)
                         AS discount_saved,
@@ -1052,11 +1055,12 @@ class Database:
                     ri.is_weight,
                     ri.gross_amount,
                     ri.discount_amount,
-                    ri.net_amount
+                    ri.net_amount,
+                    ri.is_deposit
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
                 JOIN item_catalog c ON c.item_number = ri.item_number
-                WHERE ri.is_deposit = 0
+                WHERE ri.crv_owner_id IS NULL
                   AND (casefold(ri.item_number) LIKE ?
                    OR casefold(ri.raw_description) LIKE ?
                    OR casefold(c.clean_name) LIKE ?)
@@ -1228,7 +1232,7 @@ class Database:
                                       THEN ri.net_amount ELSE 0.0 END), 0.0) AS alcohol_items_net
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
-                {_CATALOG_OF_LINE}
+                JOIN item_catalog c ON c.item_number = ri.item_number
                 WHERE {where_sql}
                 """,
                 [ALCOHOL_CATEGORY, *params],
