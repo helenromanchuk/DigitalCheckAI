@@ -824,6 +824,76 @@ def test_startup_migrates_russian_categories_to_english(tmp_path: Path):
     }
 
 
+def test_legacy_default_categories_ignore_custom_english_aliases(tmp_path: Path):
+    import sqlite3
+
+    from app.config import DEFAULT_CATEGORY_LABELS_RU
+
+    db_path = tmp_path / "legacy_defaults.db"
+    _legacy_russian_db(db_path)
+    expected = {}
+    with sqlite3.connect(db_path) as conn:
+        for canonical, russian in DEFAULT_CATEGORY_LABELS_RU.items():
+            for name in (canonical, russian, f" {canonical.swapcase()} ", f" {russian.swapcase()} "):
+                item_number = f"legacy-default-{len(expected)}"
+                alias = f"Legacy alias {len(expected)}"
+                conn.execute("INSERT INTO custom_categories VALUES (?, '2026-10-01', ?)", (name, alias))
+                conn.execute(
+                    "INSERT INTO item_catalog VALUES (?, 'PRODUCT', 'Product', ?, 1, 'manual', '2026-10-01')",
+                    (item_number, name),
+                )
+                expected[item_number] = canonical
+
+    for _ in range(2):
+        db = Database(db_path)
+        catalog = db.get_existing_catalog_map(list(expected))
+        assert {number: item["category"] for number, item in catalog.items()} == expected
+        assert all(item["is_manual_override"] == 1 and item["classified_by"] == "manual" for item in catalog.values())
+        assert not any(name.startswith("Legacy alias") for name in db.get_all_categories())
+        assert db.get_existing_catalog_map(["1"])["1"]["category"] == "Kids"
+
+
+def test_legacy_alcohol_alias_preserves_membership_exclusions(tmp_path: Path):
+    db_path = tmp_path / "legacy_alcohol.db"
+    db = Database(db_path)
+    db.upsert_receipts(parse_any_costco_payload({
+        "transactionBarcode": "LEGACY-ALCOHOL",
+        "transactionDate": "2026-10-01",
+        "total": 170,
+        "itemArray": [
+            {"itemNumber": "7", "itemDescription01": "MERLOT", "unit": 1, "amount": 50},
+            {"itemNumber": "8", "itemDescription01": "WINE RACK", "unit": 1, "amount": 20},
+            {"itemNumber": "9", "itemDescription01": "GROCERIES", "unit": 1, "amount": 100},
+        ],
+    }))
+    with db.connect() as conn:
+        conn.execute("ALTER TABLE custom_categories RENAME COLUMN name_ru TO name_en")
+        conn.executescript(
+            """
+            INSERT INTO custom_categories VALUES ('Алкоголь', '2026-10-01', 'Wine'), ('Wine', '2026-10-01', '');
+            UPDATE item_catalog SET category = 'Алкоголь', is_manual_override = 1, classified_by = 'manual'
+            WHERE item_number = '7';
+            UPDATE item_catalog SET category = 'Wine', is_manual_override = 1, classified_by = 'manual'
+            WHERE item_number = '8';
+            PRAGMA user_version = 2;
+            """
+        )
+
+    for _ in range(2):
+        db = Database(db_path)
+        excluded = db.get_membership_analytics(year="2026", exclude_alcohol=True)
+        assert excluded["spend_breakdown"]["excluded_alcohol_spent"] == 50
+        assert excluded["spend_breakdown"]["eligible_spend"] == 120
+        assert excluded["comparison"]["estimated_reward"] == 2.4
+        included = db.get_membership_analytics(year="2026", exclude_alcohol=False)
+        assert included["spend_breakdown"]["eligible_spend"] == 170
+        assert included["comparison"]["estimated_reward"] == 3.4
+        catalog = db.get_existing_catalog_map(["7", "8"])
+        assert catalog["7"]["category"] == "Alcohol"
+        assert catalog["8"]["category"] == "Wine"
+        assert "Алкоголь" not in db.get_all_categories()
+
+
 def test_blank_category_names_are_rejected(tmp_path: Path):
     import pytest
 

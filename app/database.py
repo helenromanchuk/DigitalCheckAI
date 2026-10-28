@@ -266,7 +266,7 @@ class Database:
         rows = conn.execute(
             f"""
             SELECT ri.id, ri.transaction_barcode, ri.item_number, ri.raw_description, ri.net_amount,
-                   ri.tax_flag, r.tax
+                   ri.tax_flag, r.tax, r.receipt_type, r.total
             FROM receipt_items ri
             JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
             WHERE ri.transaction_barcode IN ({outdated})
@@ -276,7 +276,9 @@ class Database:
         ).fetchall()
         for _, group in groupby(rows, key=lambda row: row["transaction_barcode"]):
             lines = [dict(row) for row in group]
-            cls._save_split(conn, lines, lines[0]["tax"])
+            cls._save_split(
+                conn, lines, lines[0]["tax"], receipt_type=lines[0]["receipt_type"], receipt_total=lines[0]["total"]
+            )
         # Receipts without lines have nothing to split
         conn.execute(
             "UPDATE receipts SET tax_split_version = ? WHERE tax_split_version IS NOT ?",
@@ -284,11 +286,19 @@ class Database:
         )
 
     @staticmethod
-    def _save_split(conn: sqlite3.Connection, lines: list[dict[str, Any]], receipt_tax: float) -> None:
+    def _save_split(
+        conn: sqlite3.Connection, lines: list[dict[str, Any]], receipt_tax: float,
+        *, receipt_type: str, receipt_total: float,
+    ) -> None:
         """Stores one receipt's CRV owners and tax split; lines are in receipt order, each with its id.
 
+        Online totals that include charges outside merchandise cannot allocate their whole tax to these lines.
         The caller marks the receipt with SPLIT_RULES_VERSION.
         """
+        has_other_charges = receipt_type == "online" and round(
+            receipt_total - receipt_tax - sum(float(line.get("net_amount") or 0.0) for line in lines), 2
+        ) != 0.0
+        splits = split_receipt(lines, receipt_tax, has_other_charges=has_other_charges)
         conn.executemany(
             "UPDATE receipt_items SET crv_owner_id = ?, tax_amount = ?, crv_amount = ?, is_deposit = ?, tax_unsplit = ?"
             " WHERE id = ?",
@@ -301,7 +311,7 @@ class Database:
                     1 if split["tax_unsplit"] else 0,
                     line["id"],
                 )
-                for line, split in zip(lines, split_receipt(lines, receipt_tax), strict=True)
+                for line, split in zip(lines, splits, strict=True)
             ],
         )
 
@@ -313,11 +323,13 @@ class Database:
         with that English name already exists (in any letter case), the row is merged into it and its
         Russian name becomes that category's label if it has none.
         Rows without an English name keep their name; add_custom_category can translate them later.
+        Default names keep their identity for the default-category normalization that follows.
         """
+        defaults = default_category_lookup()
         rows = conn.execute("SELECT name, name_en FROM custom_categories WHERE TRIM(name_en) != ''").fetchall()
         for row in rows:
             old, new = row["name"], row["name_en"].strip()
-            if new == old:
+            if old.strip().casefold() in defaults or new == old:
                 continue
             existing = conn.execute(
                 "SELECT name FROM custom_categories WHERE casefold(name) = ? AND name != ?", (new.casefold(), old)
@@ -814,7 +826,10 @@ class Database:
                             "tax_flag": str(line.get("tax_flag", "")),
                         }
                     )
-                self._save_split(conn, inserted_lines, float(receipt.get("tax", 0.0)))
+                self._save_split(
+                    conn, inserted_lines, float(receipt.get("tax", 0.0)),
+                    receipt_type=receipt.get("receipt_type", "warehouse"), receipt_total=float(receipt.get("total", 0.0)),
+                )
                 conn.execute(
                     "UPDATE receipts SET tax_split_version = ? WHERE transaction_barcode = ?",
                     (SPLIT_RULES_VERSION, barcode),

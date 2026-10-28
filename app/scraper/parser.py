@@ -399,7 +399,8 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
     # getOrderDetails has no per-line tax flag, only the order's tax. With a single item that tax is all its own;
     # with several it can't be told which are taxable (groceries aren't), so the tax isn't split per item.
     # Fees and shipping aren't items, so when the order has them its tax may be theirs. A flag the line does
-    # carry (e.g. in an imported file) is kept
+    # carry (e.g. in an imported file) is kept. The stored split checks the total against merchandise plus tax
+    # so charges still prevent allocation even when every merchandise line carries an explicit flag.
     shipping = _to_float(raw_order.get("shippingAndHandling") or raw_order.get("shippingTotal"), 0.0)
     has_charges = bool(fees) or bool(shipping)
     if len(normalized_items) == 1 and not normalized_items[0]["tax_flag"] and not has_charges:
