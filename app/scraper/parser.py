@@ -93,7 +93,7 @@ def spread_discount(items: list[dict[str, Any]], amount: float, base_key: str) -
     return amount
 
 
-def _mark_crv(item_entry: dict[str, Any]) -> None:
+def mark_crv(item_entry: dict[str, Any]) -> None:
     item_entry["is_crv"] = True
     # A bottle deposit takes the category of the item it is charged for, so it needs no classifying
     item_entry["default_category"] = OTHER_CATEGORY
@@ -152,7 +152,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
                 if item_copy.get("default_category"):
                     item_copy["is_crv"] = True
                 else:
-                    _mark_crv(item_copy)
+                    mark_crv(item_copy)
             normalized_items.append(item_copy)
             continue
 
@@ -223,7 +223,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
         if is_explicit_fuel:
             _mark_fuel(item_entry)
         elif is_crv_line(full_raw_desc):
-            _mark_crv(item_entry)
+            mark_crv(item_entry)
             non_fuel_lines += 1
         elif is_keyword_fuel:
             keyword_fuel_items.append((item_entry, amount, unit_price))
@@ -394,7 +394,7 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
         )
         if is_crv_line(desc):
             # As on warehouse receipts: the deposit takes its bottle's category and isn't sent to Gemini
-            _mark_crv(normalized_items[-1])
+            mark_crv(normalized_items[-1])
 
     # getOrderDetails has no per-line tax flag, only the order's tax. With a single item that tax is all its own;
     # with several it can't be told which are taxable (groceries aren't), so the tax isn't split per item.

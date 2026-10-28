@@ -239,17 +239,20 @@ function renderPurchaseSearch(data, query) {
     return;
   }
 
-  // Totals are product spend: a deposit on its own isn't counted, as in the Items tab's Net
-  const totalGross = rows.reduce((sum, r) => sum + (r.is_deposit ? 0 : r.gross_amount), 0);
-  const totalNet = rows.reduce((sum, r) => sum + (r.is_deposit ? 0 : r.net_amount), 0);
+  // Purchases and their totals are products; deposits (rows of their own, or folded into a bottle's row)
+  // are summed apart, as the Items tab shows them under Tax/CRV rather than Net
+  const products = rows.filter(r => !r.is_deposit);
+  const totalGross = products.reduce((sum, r) => sum + r.gross_amount, 0);
+  const totalNet = products.reduce((sum, r) => sum + r.net_amount, 0);
+  const totalCrv = rows.reduce((sum, r) => sum + (r.is_deposit ? r.net_amount : r.crv_amount || 0), 0);
   const stores = [...new Set(rows.map(r => STORE_LABELS[r.store] || r.store))].join(", ");
   summary.textContent = t("search.summary", {
-    count: rows.length,
+    count: products.length,
     limited: rows.length >= 500 ? t("search.limited") : "",
     stores,
     gross: formatMoney(totalGross),
     net: formatMoney(totalNet)
-  });
+  }) + (totalCrv ? ` • ${t("search.crvTotal", { amount: formatMoney(totalCrv) })}` : "");
 
   tbody.innerHTML = rows.map(r => {
     const hasDiscount = r.discount_amount > 0;
@@ -273,7 +276,7 @@ function renderPurchaseSearch(data, query) {
         </td>
         <td class="px-3 py-2 text-right text-slate-600">${r.quantity}</td>
         <td class="px-3 py-2 text-right text-slate-500">${r.is_deposit ? "—" : hasDiscount ? `<s>${formatMoney(r.gross_amount)}</s>` : formatMoney(r.gross_amount)}</td>
-        <td class="px-3 py-2 text-right font-bold ${hasDiscount ? "text-emerald-700" : "text-slate-900"}">${formatMoney(r.net_amount)}${r.is_deposit ? ` <span class="text-[10px] font-normal text-slate-400">CRV</span>` : unitNet}${!r.is_deposit && r.crv_amount ? `<div class="text-[10px] font-normal text-slate-400">${escapeHtml(t("receipts.itemCrv", { amount: formatMoney(r.crv_amount) }))}</div>` : ""}</td>
+        <td class="px-3 py-2 text-right font-bold ${hasDiscount ? "text-emerald-700" : "text-slate-900"}">${r.is_deposit ? `—<div class="text-[10px] font-normal text-slate-400">${escapeHtml(t("receipts.itemCrv", { amount: formatMoney(r.net_amount) }))}</div>` : formatMoney(r.net_amount) + unitNet}${!r.is_deposit && r.crv_amount ? `<div class="text-[10px] font-normal text-slate-400">${escapeHtml(t("receipts.itemCrv", { amount: formatMoney(r.crv_amount) }))}</div>` : ""}</td>
         <td class="px-3 py-2 text-right text-slate-700">${formatUnitPrice(r.price_per_lb)}</td>
         <td class="px-3 py-2 text-right text-slate-700">${formatUnitPrice(r.price_per_oz)}</td>
       </tr>`;
@@ -698,14 +701,19 @@ async function loadReceiptsList() {
 // The Tax/CRV cell of a receipt line or an item row; padding differs between the two tables
 function taxCrvCell(item, padding) {
   const value = item.tax_amount != null || item.crv_amount ? formatMoney(item.tax_crv) : "—";
-  return `<td class="${padding} text-right text-slate-500" title="${escapeHtml(taxCrvTitle(item))}">${value}</td>`;
+  // In the Items tab, some purchases' tax couldn't be split: the value leaves it out, as Total does
+  const mark = item.tax_partial && !item.tax_unknown && value !== "—" ? "*" : "";
+  return `<td class="${padding} text-right text-slate-500" title="${escapeHtml(taxCrvTitle(item))}">${value}${mark}</td>`;
 }
 
 function taxCrvTitle(item) {
   const parts = [];
   if (item.tax_amount) parts.push(t("receipts.itemTax", { amount: formatMoney(item.tax_amount) }));
   if (item.crv_amount) parts.push(t("receipts.itemCrv", { amount: formatMoney(item.crv_amount) }));
-  return parts.join(" + ");
+  const title = parts.join(" + ");
+  if (item.tax_unknown || item.tax_unsplit) return [title, t("total.taxNotSplit")].filter(Boolean).join(". ");
+  if (item.tax_partial) return [title, t("total.taxPartial")].filter(Boolean).join(". ");
+  return title;
 }
 
 function renderReceiptsList(data) {

@@ -12,7 +12,7 @@ from app.money import allocate_cents
 
 # Version of the rules below. The split is stored with each receipt (receipts.tax_split_version), and receipts
 # split by other rules are split again on startup, so bump this whenever a change here alters any result
-SPLIT_RULES_VERSION = 6
+SPLIT_RULES_VERSION = 7
 
 # A California bottle deposit (CRV) line: "CA REDEMP VAL T EI/919140" is the deposit for item 919140; "T" means
 # the deposit itself is taxed, "N" that it isn't. Truncated wordings ("CA REDEMP VA"), a marker glued to the
@@ -143,6 +143,9 @@ def split_receipt(lines: list[dict[str, Any]], receipt_tax: float) -> list[dict[
             # A deposit that states nothing is taxed like the bottle it is charged for
             taxable = _taxable(lines[target], infos[target])
         amount = float(lines[i].get("net_amount") or 0.0)
+        if taxable is None and amount == 0.0:
+            # A $0.00 line can't carry any tax, so not knowing its taxability doesn't matter
+            taxable = False
         if infos[i] is not None:
             # A deposit is shown under Tax/CRV: on its bottle, or on its own line when the bottle isn't here
             crv[target] += amount

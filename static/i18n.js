@@ -20,6 +20,7 @@ const I18N = {
     "search.minChars": "Введите хотя бы 2 символа.",
     "search.notFound": "Ничего не найдено по запросу «{query}».",
     "search.summary": "Найдено покупок: {count}{limited} • Магазины: {stores} • До скидки: {gross} • Со скидкой: {net}",
+    "search.crvTotal": "Залог CRV: {amount}",
     "search.limited": " (показаны первые 500)",
     "search.perUnit": "{amount} за ед.",
 
@@ -235,6 +236,7 @@ const I18N = {
     "search.minChars": "Type at least 2 characters.",
     "search.notFound": "Nothing found for “{query}”.",
     "search.summary": "Purchases found: {count}{limited} • Stores: {stores} • Before discounts: {gross} • After discounts: {net}",
+    "search.crvTotal": "CRV deposits: {amount}",
     "search.limited": " (showing the first 500)",
     "search.perUnit": "{amount} each",
 

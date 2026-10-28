@@ -159,9 +159,11 @@ class Database:
             # the receipt's tax_split_version says which rules produced them (see _split_outdated_receipts)
             if "crv_owner_id" not in item_columns:
                 conn.execute("ALTER TABLE receipt_items ADD COLUMN crv_owner_id INTEGER")
-            if "tax_unsplit" not in item_columns:
+            if "tax_amount" not in item_columns:
                 conn.execute("ALTER TABLE receipt_items ADD COLUMN tax_amount REAL")
+            if "crv_amount" not in item_columns:
                 conn.execute("ALTER TABLE receipt_items ADD COLUMN crv_amount REAL NOT NULL DEFAULT 0.0")
+            if "tax_unsplit" not in item_columns:
                 conn.execute("ALTER TABLE receipt_items ADD COLUMN tax_unsplit INTEGER")
             if "is_deposit" not in item_columns:
                 # A CRV line, folded into its bottle or not: never listed as a product
@@ -259,6 +261,8 @@ class Database:
     def _split_outdated_receipts(cls, conn: sqlite3.Connection) -> None:
         """Stores the tax split of every receipt whose tax_split_version isn't SPLIT_RULES_VERSION."""
         outdated = "SELECT transaction_barcode FROM receipts WHERE tax_split_version IS NOT ?"
+        if conn.execute(f"SELECT EXISTS ({outdated})", (SPLIT_RULES_VERSION,)).fetchone()[0] == 0:
+            return
         rows = conn.execute(
             f"""
             SELECT ri.id, ri.transaction_barcode, ri.item_number, ri.raw_description, ri.net_amount,
@@ -1066,10 +1070,14 @@ class Database:
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
                 JOIN item_catalog c ON c.item_number = ri.item_number
-                WHERE ri.crv_owner_id IS NULL
-                  AND (casefold(ri.item_number) LIKE ?
-                   OR casefold(ri.raw_description) LIKE ?
-                   OR casefold(c.clean_name) LIKE ?)
+                -- A deposit folded into a bottle is found by its own text ("CA REDEMP", "1254", "CRV"), not by
+                -- the bottle's item number at the end of its description: the bottle's row already shows it
+                WHERE casefold(ri.item_number) LIKE ?
+                   OR casefold(
+                        CASE WHEN ri.crv_owner_id IS NULL THEN ri.raw_description
+                             ELSE rtrim(ri.raw_description, '0123456789/ ') END
+                      ) LIKE ?
+                   OR casefold(c.clean_name) LIKE ?
                 ORDER BY r.transaction_date DESC, ri.id ASC
                 LIMIT ?
                 """,
@@ -1233,8 +1241,9 @@ class Database:
                 SELECT
                     COALESCE(SUM(CASE WHEN r.receipt_type != 'gas' THEN ri.net_amount ELSE 0.0 END), 0.0) AS non_gas_items_net,
                     COALESCE(SUM(CASE WHEN r.receipt_type = 'gas' THEN ri.net_amount ELSE 0.0 END), 0.0) AS gas_items_net,
-                    -- A deposit on a bottle stays in the reward base, as before deposits were linked to items
-                    COALESCE(SUM(CASE WHEN r.receipt_type != 'gas' AND c.category = ? AND ri.is_deposit = 0
+                    -- Each line by its own catalog row: a deposit on a bottle of wine is under its CRV row
+                    -- ("Other"), so it stays in the reward base, as before deposits were linked to bottles
+                    COALESCE(SUM(CASE WHEN r.receipt_type != 'gas' AND c.category = ?
                                       THEN ri.net_amount ELSE 0.0 END), 0.0) AS alcohol_items_net
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode

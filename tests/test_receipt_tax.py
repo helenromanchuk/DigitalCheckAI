@@ -139,7 +139,8 @@ def test_crv_is_parsed_into_other_and_kept_out_of_search_and_gemini(tmp_path):
     db.upsert_receipts([parsed])
 
     assert [i["item_number"] for i in db.get_pending_items_for_gemini()] == ["919140"]
-    assert db.search_purchases("REDEMP") == []
+    # Found only as a deposit (by its own text), never as a product
+    assert [r["is_deposit"] for r in db.search_purchases("REDEMP")] == [1]
     (receipt_row,) = db.get_receipts_list()
     (wine,) = receipt_row["items"]
     assert wine["tax_crv"] == 0.61
@@ -925,3 +926,44 @@ def test_orphan_deposit_counts_as_a_listed_line_in_the_stats(tmp_path):
     assert (other["line_count"], other["unique_items"], other["net_spent"]) == (1, 1, 0.3)
     (row,) = db.get_items_summary()
     assert row["is_deposit"] is True
+
+
+
+def test_zero_amount_line_without_a_flag_does_not_stop_the_split():
+    items = [_item("1", "SOAP", 10.0, "Y"), _item("2", "INFO LINE", 0.0, "")]
+    soap, info = add_tax_and_crv(items, 1.0)
+    assert soap["tax_amount"] == 1.0 and not info["tax_unsplit"]
+
+
+def test_search_finds_folded_deposits_by_their_own_text_only(tmp_path):
+    from app.database import Database
+    from app.scraper.parser import parse_any_costco_payload
+
+    db = Database(tmp_path / "search_crv.db")
+    db.init_db()
+    db.upsert_receipts(parse_any_costco_payload([_wine_receipt("1017")]))
+    (deposit,) = db.search_purchases("REDEMP")
+    assert deposit["is_deposit"] == 1 and deposit["net_amount"] == 0.1
+    (wine,) = db.search_purchases("919140")
+    assert wine["item_number"] == "919140" and wine["crv_amount"] == 0.1
+
+
+def test_safeway_deposit_line_is_tagged_like_costco():
+    from app.scraper.parser import CRV_NAME
+    from app.scraper.safeway_client import parse_safeway_receipt
+
+    raw = {
+        "barCode": "999",
+        "posDateTime": "2026-06-18T10:00:00",
+        "finalTotal": "5.10",
+        "taxAmount": 0,
+        "discountTotal": "0",
+        "items": [
+            {"id": "1", "name": "WATER 24PK", "quantity": 1, "regularPrice": "5.00", "regularPriceTotal": "5.00",
+             "discountTotal": "0", "reducedPriceTotal": "5.00"},
+            {"id": "2", "name": "CA REDEMP VAL T 1", "quantity": 1, "regularPrice": "0.10", "regularPriceTotal": "0.10",
+             "discountTotal": "0", "reducedPriceTotal": "0.10"},
+        ],
+    }
+    deposit = parse_safeway_receipt(raw)["items"][1]
+    assert deposit["default_clean_name"] == CRV_NAME and deposit["is_crv"]
