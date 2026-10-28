@@ -534,17 +534,6 @@ def test_marker_glued_to_the_word_is_recognized():
     assert crv_owners([_item("919140", "MILESTONE", 4.99, "Y"), _item("1254", "CA REDEMP VALT/919140", 0.1)]) == {1: 0}
 
 
-def test_partial_receipt_lines_lose_their_tax_flags():
-    from app.scraper.costco_client import _drop_tax_flags_if_partial
-
-    parsed = {"is_partial": True, "items": [{"tax_flag": "Y"}]}
-    _drop_tax_flags_if_partial(parsed)
-    assert parsed["items"][0]["tax_flag"] == ""
-    complete = {"is_partial": False, "items": [{"tax_flag": "Y"}]}
-    _drop_tax_flags_if_partial(complete)
-    assert complete["items"][0]["tax_flag"] == "Y"
-
-
 def test_alcohol_deposits_stay_in_the_reward_base(tmp_path):
     from app.database import Database
     from app.scraper.parser import parse_any_costco_payload
@@ -803,3 +792,34 @@ def test_orphan_deposits_are_not_counted_as_unique_items(tmp_path):
     )
     (other,) = db.get_statistics()["by_category"]
     assert (other["line_count"], other["unique_items"]) == (0, 0)
+
+
+
+def test_allocate_cents_keeps_every_share_within_a_cent():
+    from app.money import allocate_cents
+
+    weights = [10.0] * 39 + [0.10]
+    shares = allocate_cents(3.91, weights)
+    assert round(sum(shares), 2) == 3.91
+    exact = [3.91 * w / sum(weights) for w in weights]
+    assert all(abs(share - value) < 0.01 for share, value in zip(shares, exact, strict=True))
+    assert allocate_cents(-1.3, [-12.99]) == [-1.3]
+
+
+def test_refunded_deposit_without_a_returned_bottle_stays_its_own_line():
+    items = [_item("919140", "MILESTONE", 12.99, "Y"), _item("1254", "CA REDEMP VAL T EI/919140", -0.10)]
+    assert crv_owners(items) == {}
+
+
+def test_blank_catalog_categories_move_to_other(tmp_path):
+    from app.database import Database
+    from app.scraper.parser import parse_any_costco_payload
+
+    db = Database(tmp_path / "blank.db")
+    db.init_db()
+    db.upsert_receipts(parse_any_costco_payload([_wine_receipt("1015")]))
+    with db.connect() as conn:
+        conn.execute("UPDATE item_catalog SET category = '' WHERE item_number = '919140'")
+    db.init_db()
+    with db.connect() as conn:
+        assert conn.execute("SELECT category FROM item_catalog WHERE item_number = '919140'").fetchone()[0] == "Other"

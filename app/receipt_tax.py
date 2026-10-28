@@ -12,7 +12,7 @@ from app.money import allocate_cents
 
 # Version of the rules below. The split is stored with each receipt (receipts.tax_split_version), and receipts
 # split by other rules are split again on startup, so bump this whenever a change here alters any result
-SPLIT_RULES_VERSION = 3
+SPLIT_RULES_VERSION = 4
 
 # A California bottle deposit (CRV) line: "CA REDEMP VAL T EI/919140" is the deposit for item 919140; "T" means
 # the deposit itself is taxed, "N" that it isn't. Truncated wordings ("CA REDEMP VA"), a marker glued to the
@@ -78,8 +78,11 @@ def crv_owners(
         if not candidates:
             continue
         refund = float(items[index].get("net_amount") or 0.0) < 0
-        same_sign = [i for i in candidates if (float(items[i].get("net_amount") or 0.0) < 0) == refund]
-        candidates = same_sign or candidates
+        # A refunded deposit belongs to a returned bottle and a charged one to a sold bottle; with no bottle of
+        # that kind on the receipt the deposit stays a line of its own
+        candidates = [i for i in candidates if (float(items[i].get("net_amount") or 0.0) < 0) == refund]
+        if not candidates:
+            continue
         split_at = bisect_left(candidates, index)
         free_earlier = [i for i in candidates[:split_at] if i not in claimed]
         free_later = [i for i in candidates[split_at:] if i not in claimed]
@@ -134,17 +137,21 @@ def split_receipt(lines: list[dict[str, Any]], receipt_tax: float) -> list[dict[
         if taxable is not False:
             may_be_taxed[target] = True
         if taxable:
-            base[target] += amount
+            base[target] = round(base[target] + amount, 2)
             has_taxable[target] = True
 
+    # The tax is split by the amount after coupons: on the stored Costco receipts the receipt's tax over the
+    # taxable amount after coupons is a steady 10.0% or 9.4% (two tax areas), and over the amount before them
+    # it scatters between 6.9% and 9.5%, so instant savings lower the taxed amount
     tax = round(float(receipt_tax or 0.0), 2)
-    base_total = sum(base.values())
+    base_total = round(sum(base.values()), 2)
     split = (
-        bool(tax) and not unknown and abs(base_total) > 1e-9 and 0.0 < tax / base_total <= MAX_TAX_RATE
+        bool(tax) and not unknown and base_total != 0.0 and 0.0 < tax / base_total <= MAX_TAX_RATE
     )
     taxes: dict[int, float | None] = {i: None for i in kept}
     if split:
-        # Rounded to cents, with the remainder on the last taxed line, so the column adds up to the receipt's tax
+        # In whole cents that add up to the receipt's tax (bases are rounded to cents, so a cancelled-out base is
+        # exactly zero)
         taxed = [i for i in kept if base[i] != 0.0]
         taxes.update(zip(taxed, allocate_cents(tax, [base[i] for i in taxed]), strict=True))
         # A taxable line whose sale and return cancel out is taxed, at $0.00; only untaxed lines get None

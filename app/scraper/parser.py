@@ -243,16 +243,14 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
     # Apply discounts to their items
     total_discounts_applied = 0.0
     for target_num, disc_val, raw_item in pending_discounts:
-        target = None
-        if target_num:
-            target = next(
-                (
-                    i
-                    for i in reversed(normalized_items)
-                    if core_item_number(i["item_number"]) == core_item_number(target_num) and i["gross_amount"] > 0
-                ),
-                None,
-            )
+        # Lines of the coupon's item: it applies to the latest sale; with only a return there, it is kept as a
+        # line of its own and taxed like the returned item
+        matches = (
+            [i for i in normalized_items if core_item_number(i["item_number"]) == core_item_number(target_num)]
+            if target_num
+            else []
+        )
+        target = next((i for i in reversed(matches) if i["gross_amount"] > 0), None)
         # Count every coupon as savings, including one kept as its own discount line below
         total_discounts_applied = round(total_discounts_applied + disc_val, 2)
         if target is not None:
@@ -265,13 +263,10 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
         # The DISCOUNT- prefix keeps it from colliding with a real product's catalog row: the coupon row's
         # own itemNumber may be a product number
         coupon_ref = target_num or str(raw_item.get("itemNumber") or "").strip() or "UNKNOWN"
-        # Its item can still be on the receipt as a return (a coupon is only applied to a sale): then the coupon
-        # changes that item's taxable amount and is taxed like it. Otherwise it changes no line's taxable amount,
-        # so without a flag of its own it counts as untaxed and doesn't stop the receipt's tax from being split
-        returned = next(
-            (i for i in normalized_items if target_num and core_item_number(i["item_number"]) == core_item_number(target_num)),
-            None,
-        )
+        # When its item is on the receipt as a return, the coupon changes that item's taxable amount and is taxed
+        # like it. Otherwise it changes no line's taxable amount, so without a flag of its own it counts as untaxed
+        # and doesn't stop the receipt's tax from being split
+        returned = matches[0] if matches else None
         coupon_flag = str(raw_item.get("taxFlag") or (returned or {}).get("tax_flag") or "N")
         item_number = f"DISCOUNT-{coupon_ref}"
         desc = str(raw_item.get("itemDescription01") or "").strip() or f"DISCOUNT #{coupon_ref}"

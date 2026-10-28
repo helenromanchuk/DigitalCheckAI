@@ -325,7 +325,7 @@ class Database:
         """
         defaults = default_category_lookup()
         custom = [row["name"] for row in conn.execute("SELECT name FROM custom_categories")]
-        used = [row["category"] for row in conn.execute("SELECT DISTINCT category FROM item_catalog WHERE category != ''")]
+        used = [row["category"] for row in conn.execute("SELECT DISTINCT category FROM item_catalog")]
         for name in {*custom, *used}:
             if name in DEFAULT_CATEGORY_LABELS_RU:
                 # A default saved as a custom row adds nothing but a label the UI ignores
