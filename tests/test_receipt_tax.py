@@ -374,3 +374,25 @@ def test_an_extra_deposit_stacks_on_the_nearest_bottle_either_side():
     ]
     owners = crv_owners(items)
     assert owners[6] == 0 and owners[7] == 8 and owners[9] == 8
+
+
+def test_untaxed_orphan_deposit_keeps_its_total_when_the_tax_is_not_split():
+    items = [_item("1", "TV", 100.00, "Y"), _item("1", "TV RETURN", -99.99, "Y"), _item("5235", "CA REDEMP VAL N EE/111", 2.5)]
+    deposit = add_tax_and_crv(items, 0.83)[-1]
+    assert deposit["tax_unsplit"] is False
+
+
+def test_single_item_online_order_with_a_fee_is_not_taxed_per_item():
+    from app.scraper.parser import parse_online_order
+
+    order = {
+        "orderNumber": "1265538997",
+        "orderPlacedDate": "2026-02-22T09:41:21",
+        "orderTax": 1.0,
+        "orderLineItems": [
+            {"itemNumber": "1", "itemDescription": "MILK", "quantity": 1, "merchandiseTotal": 5.0},
+            {"itemNumber": "F", "itemDescription": "DELIVERY", "quantity": 1, "merchandiseTotal": 10.0, "isFeeItem": True},
+        ],
+    }
+    (milk,) = parse_online_order(order)["items"]
+    assert milk["tax_flag"] == ""

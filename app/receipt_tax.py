@@ -125,8 +125,13 @@ def add_tax_and_crv(items: list[dict[str, Any]], receipt_tax: float) -> list[dic
         row["crv_amount"] = round(crv[index], 2)
         row["tax_amount"] = taxes[index]
         row["tax_crv"] = round((taxes[index] or 0.0) + crv[index], 2)
-        # A line flagged "N" carries no tax unless a taxable deposit was folded into it
-        may_be_taxed = str(row.get("tax_flag") or "").upper() != "N" or taxable_base[index] != 0.0
+        # A line flagged "N" carries no tax unless a taxable deposit was folded into it; a deposit left on its
+        # own is taxed by its T/N marker alone
+        link = _crv_link(row.get("raw_description"))
+        if link:
+            may_be_taxed = link[1]
+        else:
+            may_be_taxed = str(row.get("tax_flag") or "").upper() != "N" or taxable_base[index] != 0.0
         row["tax_unsplit"] = bool(tax) and not split and may_be_taxed
         result.append(row)
     return result

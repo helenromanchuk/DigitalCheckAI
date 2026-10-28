@@ -387,8 +387,9 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
 
     # getOrderDetails has no per-line tax flag, only the order's tax. With a single item that tax is all its own;
     # with several it can't be told which are taxable (groceries aren't), so the tax isn't split per item.
-    # A flag the line does carry (e.g. in an imported file) is kept
-    if len(normalized_items) == 1 and not normalized_items[0]["tax_flag"]:
+    # Fees aren't items, so with a fee on the order its tax may be the fee's. A flag the line does carry
+    # (e.g. in an imported file) is kept
+    if len(normalized_items) == 1 and not normalized_items[0]["tax_flag"] and not fees:
         normalized_items[0]["tax_flag"] = "Y"
 
     # getOrderDetails only returns the discount at the order level; spread it across items
