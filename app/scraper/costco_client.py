@@ -160,6 +160,13 @@ query getOrderDetails($orderNumbers: [String]) {
 }
 """
 
+def _drop_tax_flags_if_partial(parsed: dict[str, Any]) -> None:
+    """A receipt whose details didn't load may lack lines, so its tax can't be split over the lines it has."""
+    if parsed.get("is_partial"):
+        for item in parsed.get("items") or []:
+            item["tax_flag"] = ""
+
+
 # Sends GraphQL via XHR inside the page so Kasada adds its headers.
 _PAGE_GRAPHQL_JS = """
 async ({ url, query, variables, defaultClientId, clientIdentifier }) => {
@@ -454,6 +461,7 @@ class CostcoClient:
             if parsed:
                 # Without details the receipt has no items, so upsert must not wipe the stored ones
                 parsed["is_partial"] = is_partial
+                _drop_tax_flags_if_partial(parsed)
                 results.append(parsed)
         return results
 
@@ -509,5 +517,6 @@ class CostcoClient:
             parsed = parse_online_order(raw)
             if parsed:
                 parsed["is_partial"] = is_partial
+                _drop_tax_flags_if_partial(parsed)
                 results.append(parsed)
         return results

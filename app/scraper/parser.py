@@ -159,9 +159,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
             # If target_item_num isn't given, attach the coupon to the most recent item. A bottle deposit
             # isn't one: it follows its item on the receipt, and a coupon never discounts it
             if not target_item_num:
-                product = next(
-                    (i for i in reversed(normalized_items) if not is_crv_line(i.get("raw_description"))), None
-                )
+                product = next((i for i in reversed(normalized_items) if i.get("default_clean_name") != CRV_NAME), None)
                 if product:
                     target_item_num = product["item_number"]
             pending_discounts.append((target_item_num, discount_val, raw_item))
@@ -389,7 +387,8 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
     # with several it can't be told which are taxable (groceries aren't), so the tax isn't split per item.
     # Fees and shipping aren't items, so when the order has them its tax may be theirs. A flag the line does
     # carry (e.g. in an imported file) is kept
-    has_charges = bool(fees) or bool(_to_float(raw_order.get("shippingAndHandling") or raw_order.get("shippingTotal"), 0.0))
+    shipping = _to_float(raw_order.get("shippingAndHandling") or raw_order.get("shippingTotal"), 0.0)
+    has_charges = bool(fees) or bool(shipping)
     if len(normalized_items) == 1 and not normalized_items[0]["tax_flag"] and not has_charges:
         normalized_items[0]["tax_flag"] = "Y"
 
@@ -403,7 +402,6 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
 
     subtotal = _to_float(raw_order.get("merchandiseTotal") or raw_order.get("subTotal") or raw_order.get("subtotal"), 0.0)
     tax = _to_float(raw_order.get("orderTax") or raw_order.get("totalTax") or raw_order.get("tax"), 0.0)
-    shipping = _to_float(raw_order.get("shippingAndHandling") or raw_order.get("shippingTotal"), 0.0)
     total = _to_float(raw_order.get("orderTotal") or raw_order.get("total"), 0.0)
 
     items_net_sum = round(sum(i["net_amount"] for i in normalized_items), 2)

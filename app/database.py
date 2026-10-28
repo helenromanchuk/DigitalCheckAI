@@ -178,7 +178,8 @@ class Database:
         if schema_version < CRV_SCHEMA_VERSION:
             # Migration: CRV catalog rows now get a parser category instead of going to Gemini, and online
             # orders with several items no longer mark every line taxable. Online orders the re-parse below
-            # can't redo (no usable raw_json) lose the old flag here, so their tax isn't split over groceries.
+            # can't redo (no usable raw_json) lose the old all-"Y" flags here, so their tax isn't split over
+            # groceries; an order with any other flag got it from an imported file and keeps it.
             # Re-parse once, unless the re-parse above already ran with the current parsers
             with self.connect() as conn:
                 conn.execute(
@@ -190,7 +191,7 @@ class Database:
                         JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
                         WHERE r.receipt_type = 'online'
                         GROUP BY ri.transaction_barcode
-                        HAVING COUNT(*) > 1
+                        HAVING COUNT(*) > 1 AND MIN(ri.tax_flag) = 'Y' AND MAX(ri.tax_flag) = 'Y'
                     )
                     """
                 )
@@ -200,22 +201,28 @@ class Database:
                 conn.execute(f"PRAGMA user_version = {CRV_SCHEMA_VERSION}")
 
         if schema_version < TAX_SPLIT_SCHEMA_VERSION:
-            # Migration: receipts saved before the tax split was stored, and not re-parsed above, get it now.
-            # Re-parsed receipts already have it, so each receipt is split once
+            # Migration: the tax split is stored per line, so stored receipts are split again with the current
+            # rules (bump TAX_SPLIT_SCHEMA_VERSION when they change). Receipts re-parsed above were just split,
+            # so a database that ran the re-parse only fills in the ones it skipped
             with self.connect() as conn:
-                self._split_stored_receipts(conn)
+                self._split_stored_receipts(conn, only_missing=schema_version < CRV_SCHEMA_VERSION)
                 conn.execute(f"PRAGMA user_version = {TAX_SPLIT_SCHEMA_VERSION}")
 
     @classmethod
-    def _split_stored_receipts(cls, conn: sqlite3.Connection) -> None:
-        """Stores the tax split of every receipt that has lines without one."""
+    def _split_stored_receipts(cls, conn: sqlite3.Connection, only_missing: bool) -> None:
+        """Stores the tax split of every stored receipt, or only of those with lines that have none yet."""
+        where = (
+            "WHERE ri.transaction_barcode IN (SELECT transaction_barcode FROM receipt_items WHERE tax_unsplit IS NULL)"
+            if only_missing
+            else ""
+        )
         rows = conn.execute(
-            """
+            f"""
             SELECT ri.id, ri.transaction_barcode, ri.item_number, ri.raw_description, ri.net_amount,
                    ri.tax_flag, r.tax
             FROM receipt_items ri
             JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
-            WHERE ri.transaction_barcode IN (SELECT transaction_barcode FROM receipt_items WHERE tax_unsplit IS NULL)
+            {where}
             ORDER BY ri.transaction_barcode, ri.id
             """
         ).fetchall()
@@ -1165,7 +1172,9 @@ class Database:
                 SELECT
                     COALESCE(SUM(CASE WHEN r.receipt_type != 'gas' THEN ri.net_amount ELSE 0.0 END), 0.0) AS non_gas_items_net,
                     COALESCE(SUM(CASE WHEN r.receipt_type = 'gas' THEN ri.net_amount ELSE 0.0 END), 0.0) AS gas_items_net,
-                    COALESCE(SUM(CASE WHEN r.receipt_type != 'gas' AND c.category = ? THEN ri.net_amount ELSE 0.0 END), 0.0) AS alcohol_items_net
+                    -- A deposit on a bottle stays in the reward base, as before deposits were linked to items
+                    COALESCE(SUM(CASE WHEN r.receipt_type != 'gas' AND c.category = ? AND ri.crv_owner_id IS NULL
+                                      THEN ri.net_amount ELSE 0.0 END), 0.0) AS alcohol_items_net
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
                 LEFT JOIN receipt_items owner ON owner.id = ri.crv_owner_id

@@ -11,10 +11,11 @@ from app.money import allocate_cents
 
 # A California bottle deposit (CRV) line: "CA REDEMP VAL T EI/919140" is the deposit for item 919140; "T" means
 # the deposit itself is taxed, "N" that it isn't. Truncated wordings ("CA REDEMP VA"), a marker glued to the
-# code ("TEI/") and text after the item number are allowed; the marker and the item number may be missing
+# word or the code ("VALT", "TEI/") and text after the item number are allowed; the marker and the item number
+# may be missing
 _CRV_RE = re.compile(
-    r"^CA\s+REDEMP(?:TION)?\s+VA(?:L(?:UE)?)?\b"
-    r"(?:\s*([TN])(?:\s*E[A-Z])?(?=[\s/]|$))?"
+    r"^CA\s+REDEMP(?:TION)?\s+VA(?:LUE|L)?"
+    r"(?:\s*([TN])(?:\s*E[A-Z])?(?=[\s/]|$)|\b)"
     r"[^/]*(?:/\s*(\d+)\b)?",
     re.IGNORECASE,
 )

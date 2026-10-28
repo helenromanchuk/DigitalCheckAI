@@ -506,3 +506,98 @@ def test_single_item_online_order_with_shipping_is_not_taxed_per_item():
     }
     (lamp,) = parse_online_order(order)["items"]
     assert lamp["tax_flag"] == ""
+
+
+
+def _wine_receipt(barcode):
+    return {
+        "transactionBarcode": barcode,
+        "transactionDate": "2026-06-12",
+        "receiptType": "In-Warehouse",
+        "taxes": 0.51,
+        "itemArray": [
+            {"itemNumber": "919140", "itemDescription01": "MILESTONE", "unit": 1, "amount": 4.99, "taxFlag": "Y"},
+            {"itemNumber": "1254", "itemDescription01": "CA REDEMP VAL T EI/919140", "unit": 1, "amount": 0.1},
+        ],
+    }
+
+
+def test_marker_glued_to_the_word_is_recognized():
+    assert is_crv_line("CA REDEMP VALT EI/919140")
+    assert crv_owners([_item("919140", "MILESTONE", 4.99, "Y"), _item("1254", "CA REDEMP VALT/919140", 0.1)]) == {1: 0}
+
+
+def test_partial_receipt_lines_lose_their_tax_flags():
+    from app.scraper.costco_client import _drop_tax_flags_if_partial
+
+    parsed = {"is_partial": True, "items": [{"tax_flag": "Y"}]}
+    _drop_tax_flags_if_partial(parsed)
+    assert parsed["items"][0]["tax_flag"] == ""
+    complete = {"is_partial": False, "items": [{"tax_flag": "Y"}]}
+    _drop_tax_flags_if_partial(complete)
+    assert complete["items"][0]["tax_flag"] == "Y"
+
+
+def test_alcohol_deposits_stay_in_the_reward_base(tmp_path):
+    from app.database import Database
+    from app.scraper.parser import parse_any_costco_payload
+
+    db = Database(tmp_path / "reward.db")
+    db.init_db()
+    db.upsert_receipts(parse_any_costco_payload([_wine_receipt("1007")]))
+    db.save_categorized_items([{"item_number": "919140", "clean_name": "Milestone wine", "category": "Alcohol"}])
+    spend = db.get_membership_analytics()["spend_breakdown"]
+    assert spend["excluded_alcohol_spent"] == 4.99
+    assert spend["eligible_spend"] == 0.10
+
+
+def test_upgrade_resplits_receipts_split_by_older_rules(tmp_path):
+    import sqlite3
+
+    from app.database import CRV_SCHEMA_VERSION, Database
+    from app.scraper.parser import parse_any_costco_payload
+
+    path = tmp_path / "resplit.db"
+    db = Database(path)
+    db.init_db()
+    db.upsert_receipts(parse_any_costco_payload([_wine_receipt("1008")]))
+    # An earlier build stored a different split: the deposit left on its own and no tax
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE receipt_items SET crv_owner_id = NULL, tax_amount = NULL, crv_amount = 0, tax_unsplit = 0")
+        conn.execute(f"PRAGMA user_version = {CRV_SCHEMA_VERSION}")
+
+    db.init_db()
+    (wine,) = db.get_receipts_list()[0]["items"]
+    assert (wine["tax_amount"], wine["crv_amount"]) == (0.51, 0.10)
+
+
+def test_upgrade_keeps_imported_online_flags(tmp_path):
+    import sqlite3
+
+    from app.database import ENGLISH_NAMES_SCHEMA_VERSION, Database
+
+    path = tmp_path / "online_flags.db"
+    db = Database(path)
+    db.init_db()
+    db.upsert_receipts(
+        [
+            {
+                "transaction_barcode": "ONL-1",
+                "transaction_date": "2026-02-20",
+                "receipt_type": "online",
+                "tax": 1.0,
+                "total": 16.0,
+                "items": [
+                    {"item_number": "1", "raw_description": "TV", "net_amount": 10.0, "gross_amount": 10.0, "tax_flag": "Y"},
+                    {"item_number": "2", "raw_description": "KIWI", "net_amount": 5.0, "gross_amount": 5.0, "tax_flag": "N"},
+                ],
+            }
+        ]
+    )
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE receipts SET raw_json = '{}'")
+        conn.execute(f"PRAGMA user_version = {ENGLISH_NAMES_SCHEMA_VERSION}")
+
+    db.init_db()
+    tv, kiwi = db.get_receipts_list()[0]["items"]
+    assert (tv["tax_amount"], kiwi["tax_amount"]) == (1.0, None)
