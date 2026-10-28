@@ -7,7 +7,12 @@ import re
 from bisect import bisect_left
 from typing import Any
 
+from app.item_number import core_item_number
 from app.money import allocate_cents
+
+# Version of the rules below. The split is stored with each receipt (receipts.tax_split_version), and receipts
+# split by other rules are split again on startup, so bump this whenever a change here alters any result
+SPLIT_RULES_VERSION = 1
 
 # A California bottle deposit (CRV) line: "CA REDEMP VAL T EI/919140" is the deposit for item 919140; "T" means
 # the deposit itself is taxed, "N" that it isn't. Truncated wordings ("CA REDEMP VA"), a marker glued to the
@@ -47,11 +52,6 @@ def _taxable(row: dict[str, Any], crv: tuple[str | None, bool | None] | None) ->
     return True if flag == "Y" else False if flag == "N" else None
 
 
-def _item_key(item_number: Any) -> str:
-    """Item number as a CRV description refers to it: "0919140" and "919140" are the same item."""
-    return str(item_number or "").strip().lstrip("0") or "0"
-
-
 def crv_owners(
     items: list[dict[str, Any]], infos: list[tuple[str | None, bool | None] | None] | None = None
 ) -> dict[int, int]:
@@ -69,12 +69,12 @@ def crv_owners(
     lines_by_item: dict[str, list[int]] = {}
     for i, row in enumerate(items):
         if i not in links:
-            lines_by_item.setdefault(_item_key(row.get("item_number")), []).append(i)
+            lines_by_item.setdefault(core_item_number(row.get("item_number")), []).append(i)
 
     owners: dict[int, int] = {}
     claimed: set[int] = set()
     for index, item_number in links.items():
-        candidates = lines_by_item.get(_item_key(item_number)) if item_number else None
+        candidates = lines_by_item.get(core_item_number(item_number)) if item_number else None
         if not candidates:
             continue
         refund = float(items[index].get("net_amount") or 0.0) < 0
@@ -103,7 +103,8 @@ def split_receipt(lines: list[dict[str, Any]], receipt_tax: float) -> list[dict[
     per item, so the tax is split in proportion to the net amount of taxable lines (a taxable deposit counts
     towards its item) and rounded to cents so the parts add up to the receipt's tax.
 
-    The tax is split only when the taxability of every line is known (a deposit's T/N marker, else a Y/N flag)
+    The tax is split only when the taxability of every line is known (a deposit's T/N marker, else a Y/N flag,
+    else, for a folded deposit, its bottle's)
     and the implied rate is plausible (at most MAX_TAX_RATE). Otherwise tax_amount is None and tax_unsplit is True
     on the lines that may carry some of the tax: a total with tax can't be shown for them. A tax-free receipt has
     nothing to split, so its lines get None too, not a computed $0.00. A folded CRV line gets None, 0 and False.
@@ -119,6 +120,9 @@ def split_receipt(lines: list[dict[str, Any]], receipt_tax: float) -> list[dict[
     for i in range(len(lines)):
         target = owners.get(i, i)
         taxable = _taxable(lines[i], infos[i])
+        if taxable is None and i in owners:
+            # A deposit that states nothing is taxed like the bottle it is charged for
+            taxable = _taxable(lines[target], infos[target])
         amount = float(lines[i].get("net_amount") or 0.0)
         if i in owners:
             crv[target] += amount

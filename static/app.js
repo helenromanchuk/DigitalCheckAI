@@ -41,13 +41,13 @@ function formatUnitPrice(val) {
 
 // The API returns errors as {code, params, cause?, message}; show them in the UI language.
 // An unknown code falls back to the API's English message
-function apiErrorText(detail, fallbackKey) {
-  if (!detail || Array.isArray(detail)) return t(fallbackKey);
+function apiErrorText(detail, fallbackKey, fallbackParams = {}) {
+  if (!detail || Array.isArray(detail)) return t(fallbackKey, fallbackParams);
   if (typeof detail === "string") return detail;
   const params = { ...(detail.params || {}) };
-  if (detail.cause) params.reason = apiErrorText(detail.cause, fallbackKey);
+  if (detail.cause) params.reason = apiErrorText(detail.cause, fallbackKey, fallbackParams);
   const key = `error.${detail.code}`;
-  return key in I18N[currentLang] ? t(key, params) : detail.message || t(fallbackKey);
+  return key in I18N[currentLang] ? t(key, params) : detail.message || t(fallbackKey, fallbackParams);
 }
 
 function showBanner(message, type = "info") {
@@ -680,7 +680,10 @@ async function updateItemCategory(itemNumber, category, newCleanName) {
     const body = await res.json().catch(() => ({}));
     const detail = body.detail;
     const hasCode = detail && typeof detail === "object" && !Array.isArray(detail) && detail.code;
-    showBanner(hasCode ? apiErrorText(detail, "banner.itemFailed") : t("banner.itemFailed", { item: itemNumber }), "error");
+    showBanner(
+      hasCode ? apiErrorText(detail, "banner.itemFailed", { item: itemNumber }) : t("banner.itemFailed", { item: itemNumber }),
+      "error"
+    );
   }
 }
 

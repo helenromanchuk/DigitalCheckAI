@@ -167,7 +167,7 @@ def test_online_order_tax_is_split_only_for_a_single_item():
 def test_upgrade_reparses_so_pending_crv_rows_leave_the_gemini_queue(tmp_path):
     import sqlite3
 
-    from app.database import ENGLISH_NAMES_SCHEMA_VERSION, TAX_SPLIT_SCHEMA_VERSION, Database
+    from app.database import CRV_SCHEMA_VERSION, ENGLISH_NAMES_SCHEMA_VERSION, Database
     from app.scraper.parser import parse_any_costco_payload
 
     path = tmp_path / "upgrade.db"
@@ -196,7 +196,7 @@ def test_upgrade_reparses_so_pending_crv_rows_leave_the_gemini_queue(tmp_path):
     db.init_db()
     assert "1254" not in [i["item_number"] for i in db.get_pending_items_for_gemini()]
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == TAX_SPLIT_SCHEMA_VERSION
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == CRV_SCHEMA_VERSION
 
 
 def test_unsplit_tax_is_flagged_on_the_receipt_and_the_item_total(tmp_path):
@@ -420,11 +420,16 @@ def test_crv_wordings_are_recognized():
     assert crv_owners(items) == {1: 0}
 
 
-def test_deposit_without_a_marker_leaves_the_tax_unsplit():
+def test_deposit_that_states_nothing_is_taxed_like_its_bottle():
     items = [_item("919140", "MILESTONE", 4.99, "Y"), _item("1254", "CA REDEMP VAL /919140", 0.10)]
     (wine,) = add_tax_and_crv(items, 0.51)
-    assert wine["crv_amount"] == 0.10
-    assert wine["tax_amount"] is None and wine["tax_unsplit"] is True
+    assert (wine["crv_amount"], wine["tax_amount"], wine["tax_unsplit"]) == (0.10, 0.51, False)
+
+
+def test_orphan_deposit_that_states_nothing_leaves_the_tax_unsplit():
+    items = [_item("1", "SOAP", 10.0, "Y"), _item("1254", "CA REDEMP VAL /111", 0.10)]
+    soap, deposit = add_tax_and_crv(items, 1.0)
+    assert soap["tax_amount"] is None and soap["tax_unsplit"] and deposit["tax_unsplit"]
 
 
 def test_old_database_drops_crv_for_item_and_gets_the_split_stored(tmp_path):
@@ -452,6 +457,7 @@ def test_old_database_drops_crv_for_item_and_gets_the_split_stored(tmp_path):
         conn.execute("ALTER TABLE receipt_items ADD COLUMN crv_for_item TEXT")
         for column in ("tax_amount", "crv_amount", "tax_unsplit"):
             conn.execute(f"ALTER TABLE receipt_items DROP COLUMN {column}")
+        conn.execute("ALTER TABLE receipts DROP COLUMN tax_split_version")
         conn.execute("UPDATE receipt_items SET crv_owner_id = NULL")
         conn.execute(f"PRAGMA user_version = {CRV_SCHEMA_VERSION}")
 
@@ -564,6 +570,7 @@ def test_upgrade_resplits_receipts_split_by_older_rules(tmp_path):
     # An earlier build stored a different split: the deposit left on its own and no tax
     with sqlite3.connect(path) as conn:
         conn.execute("UPDATE receipt_items SET crv_owner_id = NULL, tax_amount = NULL, crv_amount = 0, tax_unsplit = 0")
+        conn.execute("UPDATE receipts SET tax_split_version = NULL")
         conn.execute(f"PRAGMA user_version = {CRV_SCHEMA_VERSION}")
 
     db.init_db()
@@ -601,3 +608,73 @@ def test_upgrade_keeps_imported_online_flags(tmp_path):
     db.init_db()
     tv, kiwi = db.get_receipts_list()[0]["items"]
     assert (tv["tax_amount"], kiwi["tax_amount"]) == (1.0, None)
+
+
+
+def test_coupon_on_a_returned_item_is_taxed_like_it():
+    from app.scraper.parser import parse_warehouse_or_gas_receipt
+
+    parsed = parse_warehouse_or_gas_receipt(
+        {
+            "transactionBarcode": "1009",
+            "transactionDate": "2026-06-09",
+            "receiptType": "In-Warehouse",
+            "itemArray": [
+                {"itemNumber": "5555555", "itemDescription01": "DRILL", "unit": -1, "amount": -20.0, "taxFlag": "Y"},
+                {"itemNumber": "999", "itemDescription01": "/ 5555555", "unit": 1, "amount": -3.0},
+            ],
+        }
+    )
+    coupon = next(i for i in parsed["items"] if i["item_number"].startswith("DISCOUNT-"))
+    assert coupon["tax_flag"] == "Y"
+
+
+def test_receipts_split_by_older_rules_are_split_again(tmp_path, monkeypatch):
+    import app.database as database
+    from app.scraper.parser import parse_any_costco_payload
+
+    db = database.Database(tmp_path / "rules.db")
+    db.init_db()
+    db.upsert_receipts(parse_any_costco_payload([_wine_receipt("1010")]))
+    with db.connect() as conn:
+        conn.execute("UPDATE receipt_items SET tax_amount = NULL, crv_amount = 0, crv_owner_id = NULL")
+
+    monkeypatch.setattr(database, "SPLIT_RULES_VERSION", database.SPLIT_RULES_VERSION + 1)
+    db.init_db()
+    (wine,) = db.get_receipts_list()[0]["items"]
+    assert (wine["tax_amount"], wine["crv_amount"]) == (0.51, 0.10)
+    with db.connect() as conn:
+        assert conn.execute("SELECT tax_split_version FROM receipts").fetchone()[0] == database.SPLIT_RULES_VERSION
+
+
+def test_oldest_database_resplits_online_orders_whose_flags_were_reset(tmp_path):
+    import sqlite3
+
+    from app.database import Database
+
+    path = tmp_path / "v0.db"
+    db = Database(path)
+    db.init_db()
+    db.upsert_receipts(
+        [
+            {
+                "transaction_barcode": "ONL-2",
+                "transaction_date": "2026-02-20",
+                "receipt_type": "online",
+                "tax": 1.5,
+                "total": 16.5,
+                "items": [
+                    {"item_number": "1", "raw_description": "TV", "net_amount": 10.0, "gross_amount": 10.0, "tax_flag": "Y"},
+                    {"item_number": "2", "raw_description": "KIWI", "net_amount": 5.0, "gross_amount": 5.0, "tax_flag": "Y"},
+                ],
+            }
+        ]
+    )
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE receipts SET raw_json = '{}'")
+        conn.execute("PRAGMA user_version = 0")
+
+    db.init_db()
+    tv, kiwi = db.get_receipts_list()[0]["items"]
+    assert (tv["tax_amount"], kiwi["tax_amount"]) == (None, None)
+    assert tv["tax_unsplit"] and kiwi["tax_unsplit"]

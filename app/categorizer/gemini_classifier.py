@@ -19,6 +19,7 @@ from app.config import (
     is_english_category_name,
 )
 from app.database import Database
+from app.item_number import core_item_number
 
 logger = logging.getLogger(__name__)
 
@@ -313,9 +314,7 @@ def _same_item_number(returned: str, expected: str, batch_inums: set[str]) -> bo
     ret_swy = bool(_SWY_PREFIX_RE.match(ret))
     if ret_swy and not exp_swy:
         return False
-    exp_core = _SWY_PREFIX_RE.sub("", exp).strip().lstrip("0") or "0"
-    ret_core = _SWY_PREFIX_RE.sub("", ret).strip().lstrip("0") or "0"
-    return ret_core == exp_core
+    return core_item_number(_SWY_PREFIX_RE.sub("", ret)) == core_item_number(_SWY_PREFIX_RE.sub("", exp))
 
 
 def _make_gemini_client(api_key: str) -> Any:

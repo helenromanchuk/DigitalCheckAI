@@ -159,7 +159,9 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
             # If target_item_num isn't given, attach the coupon to the most recent item. A bottle deposit
             # isn't one: it follows its item on the receipt, and a coupon never discounts it
             if not target_item_num:
-                product = next((i for i in reversed(normalized_items) if i.get("default_clean_name") != CRV_NAME), None)
+                product = next(
+                    (i for i in reversed(normalized_items) if not is_crv_line(i.get("raw_description"))), None
+                )
                 if product:
                     target_item_num = product["item_number"]
             pending_discounts.append((target_item_num, discount_val, raw_item))
@@ -256,6 +258,11 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
         # The DISCOUNT- prefix keeps it from colliding with a real product's catalog row: the coupon row's
         # own itemNumber may be a product number
         coupon_ref = target_num or str(raw_item.get("itemNumber") or "").strip() or "UNKNOWN"
+        # Its item can still be on the receipt as a return (a coupon is only applied to a sale): then the coupon
+        # changes that item's taxable amount and is taxed like it. Otherwise it changes no line's taxable amount,
+        # so without a flag of its own it counts as untaxed and doesn't stop the receipt's tax from being split
+        returned = next((i for i in normalized_items if target_num and i["item_number"] == target_num), None)
+        coupon_flag = str(raw_item.get("taxFlag") or (returned or {}).get("tax_flag") or "N")
         item_number = f"DISCOUNT-{coupon_ref}"
         desc = str(raw_item.get("itemDescription01") or "").strip() or f"DISCOUNT #{coupon_ref}"
         normalized_items.append(
@@ -268,9 +275,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
                 "gross_amount": 0.0,
                 "discount_amount": disc_val,
                 "net_amount": -disc_val,
-                # A coupon for an item that isn't on the receipt changes no line's taxable amount, so without
-                # a flag of its own it counts as untaxed and doesn't stop the receipt's tax from being split
-                "tax_flag": str(raw_item.get("taxFlag") or "N"),
+                "tax_flag": coupon_flag,
                 "is_weight": False,
                 "default_category": OTHER_CATEGORY,
                 "default_clean_name": f"{COUPON_NAME_PREFIX}{desc})",

@@ -161,7 +161,11 @@ query getOrderDetails($orderNumbers: [String]) {
 """
 
 def _drop_tax_flags_if_partial(parsed: dict[str, Any]) -> None:
-    """A receipt whose details didn't load may lack lines, so its tax can't be split over the lines it has."""
+    """A receipt whose details didn't load may lack lines, so its tax can't be split over the lines it has.
+
+    The stored raw_json of such a receipt is the list summary, which has no lines, so re-parsing it later
+    (reparse_stored_receipts skips receipts without items) can't bring the flags back.
+    """
     if parsed.get("is_partial"):
         for item in parsed.get("items") or []:
             item["tax_flag"] = ""

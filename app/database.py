@@ -19,14 +19,13 @@ from app.config import (
     merge_category_labels_ru,
 )
 from app.errors import AppError
-from app.receipt_tax import split_receipt
+from app.receipt_tax import SPLIT_RULES_VERSION, split_receipt
 from app.unit_price import add_unit_prices
 
 # PRAGMA user_version after each one-time data migration (see init_db)
 REPARSE_SCHEMA_VERSION = 1
 ENGLISH_NAMES_SCHEMA_VERSION = 2
 CRV_SCHEMA_VERSION = 3
-TAX_SPLIT_SCHEMA_VERSION = 4
 
 
 def _category_reserved(value: str) -> AppError:
@@ -136,6 +135,9 @@ class Database:
             receipt_columns = {row["name"] for row in conn.execute("PRAGMA table_info(receipts)")}
             if "store" not in receipt_columns:
                 conn.execute("ALTER TABLE receipts ADD COLUMN store TEXT NOT NULL DEFAULT 'costco'")
+            # Migration: the version of the tax split rules a receipt's lines were split with (NULL: not split)
+            if "tax_split_version" not in receipt_columns:
+                conn.execute("ALTER TABLE receipts ADD COLUMN tax_split_version INTEGER")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_receipts_store ON receipts(store)")
             # Migration: item image (source URL and local file in data/images)
             catalog_columns = {row["name"] for row in conn.execute("PRAGMA table_info(item_catalog)")}
@@ -149,7 +151,7 @@ class Database:
                 conn.execute("ALTER TABLE receipt_items ADD COLUMN is_weight INTEGER NOT NULL DEFAULT 0")
             # Migration: each line's tax share and CRV (see app.receipt_tax), stored when its receipt is saved.
             # crv_owner_id is the receipt_items id a CRV line ("CA REDEMP VAL T EI/919140") is folded into;
-            # tax_unsplit is NULL until the line's receipt has been split (see _split_stored_receipts)
+            # the receipt's tax_split_version says which rules produced them (see _split_outdated_receipts)
             if "crv_owner_id" not in item_columns:
                 conn.execute("ALTER TABLE receipt_items ADD COLUMN crv_owner_id INTEGER")
             if "tax_unsplit" not in item_columns:
@@ -181,58 +183,60 @@ class Database:
             # can't redo (no usable raw_json) lose the old all-"Y" flags here, so their tax isn't split over
             # groceries; an order with any other flag got it from an imported file and keeps it.
             # Re-parse once, unless the re-parse above already ran with the current parsers
+            # Their stored split came from the old flags, so they are split again below
+            all_taxable_online = """
+                SELECT ri.transaction_barcode
+                FROM receipt_items ri
+                JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
+                WHERE r.receipt_type = 'online'
+                GROUP BY ri.transaction_barcode
+                HAVING COUNT(*) > 1 AND MIN(ri.tax_flag) = 'Y' AND MAX(ri.tax_flag) = 'Y'
+            """
             with self.connect() as conn:
                 conn.execute(
-                    """
-                    UPDATE receipt_items SET tax_flag = ''
-                    WHERE transaction_barcode IN (
-                        SELECT ri.transaction_barcode
-                        FROM receipt_items ri
-                        JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
-                        WHERE r.receipt_type = 'online'
-                        GROUP BY ri.transaction_barcode
-                        HAVING COUNT(*) > 1 AND MIN(ri.tax_flag) = 'Y' AND MAX(ri.tax_flag) = 'Y'
-                    )
-                    """
+                    f"UPDATE receipts SET tax_split_version = NULL WHERE transaction_barcode IN ({all_taxable_online})"
                 )
+                conn.execute(f"UPDATE receipt_items SET tax_flag = '' WHERE transaction_barcode IN ({all_taxable_online})")
             if schema_version >= REPARSE_SCHEMA_VERSION:
                 self.reparse_stored_receipts()
             with self.connect() as conn:
                 conn.execute(f"PRAGMA user_version = {CRV_SCHEMA_VERSION}")
 
-        if schema_version < TAX_SPLIT_SCHEMA_VERSION:
-            # Migration: the tax split is stored per line, so stored receipts are split again with the current
-            # rules (bump TAX_SPLIT_SCHEMA_VERSION when they change). Receipts re-parsed above were just split,
-            # so a database that ran the re-parse only fills in the ones it skipped
-            with self.connect() as conn:
-                self._split_stored_receipts(conn, only_missing=schema_version < CRV_SCHEMA_VERSION)
-                conn.execute(f"PRAGMA user_version = {TAX_SPLIT_SCHEMA_VERSION}")
+        # Receipts not yet split, or split by older rules (an earlier build, or before SPLIT_RULES_VERSION was
+        # bumped), are split with the current ones. Re-parsed receipts were split on saving, so each is done once
+        with self.connect() as conn:
+            self._split_outdated_receipts(conn)
 
     @classmethod
-    def _split_stored_receipts(cls, conn: sqlite3.Connection, only_missing: bool) -> None:
-        """Stores the tax split of every stored receipt, or only of those with lines that have none yet."""
-        where = (
-            "WHERE ri.transaction_barcode IN (SELECT transaction_barcode FROM receipt_items WHERE tax_unsplit IS NULL)"
-            if only_missing
-            else ""
-        )
+    def _split_outdated_receipts(cls, conn: sqlite3.Connection) -> None:
+        """Stores the tax split of every receipt whose tax_split_version isn't SPLIT_RULES_VERSION."""
+        outdated = "SELECT transaction_barcode FROM receipts WHERE tax_split_version IS NOT ?"
         rows = conn.execute(
             f"""
             SELECT ri.id, ri.transaction_barcode, ri.item_number, ri.raw_description, ri.net_amount,
                    ri.tax_flag, r.tax
             FROM receipt_items ri
             JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
-            {where}
+            WHERE ri.transaction_barcode IN ({outdated})
             ORDER BY ri.transaction_barcode, ri.id
-            """
+            """,
+            (SPLIT_RULES_VERSION,),
         ).fetchall()
         for _, group in groupby(rows, key=lambda row: row["transaction_barcode"]):
             lines = [dict(row) for row in group]
             cls._save_split(conn, lines, lines[0]["tax"])
+        # Receipts without lines have nothing to split
+        conn.execute(
+            "UPDATE receipts SET tax_split_version = ? WHERE tax_split_version IS NOT ?",
+            (SPLIT_RULES_VERSION, SPLIT_RULES_VERSION),
+        )
 
     @staticmethod
     def _save_split(conn: sqlite3.Connection, lines: list[dict[str, Any]], receipt_tax: float) -> None:
-        """Stores one receipt's CRV owners and tax split; lines are in receipt order, each with its id."""
+        """Stores one receipt's CRV owners and tax split; lines are in receipt order, each with its id.
+
+        The caller marks the receipt with SPLIT_RULES_VERSION.
+        """
         conn.executemany(
             "UPDATE receipt_items SET crv_owner_id = ?, tax_amount = ?, crv_amount = ?, tax_unsplit = ? WHERE id = ?",
             [
@@ -765,6 +769,10 @@ class Database:
                         }
                     )
                 self._save_split(conn, inserted_lines, float(receipt.get("tax", 0.0)))
+                conn.execute(
+                    "UPDATE receipts SET tax_split_version = ? WHERE transaction_barcode = ?",
+                    (SPLIT_RULES_VERSION, barcode),
+                )
 
         return {
             "inserted_receipts": inserted_receipts,
