@@ -3,11 +3,11 @@ import logging
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router as api_router
-from app.config import IMAGES_DIR, LOG_LEVEL
+from app.config import IMAGES_DIR, LOG_LEVEL, CredentialStoreError
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
@@ -37,6 +37,11 @@ app = FastAPI(
 )
 
 app.include_router(api_router)
+
+
+@app.exception_handler(CredentialStoreError)
+async def credential_store_error_handler(request, exc: CredentialStoreError) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": exc.to_detail()})
 
 
 @app.middleware("http")

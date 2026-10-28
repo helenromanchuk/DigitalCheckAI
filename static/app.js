@@ -913,6 +913,9 @@ async function saveGeminiKey() {
     document.getElementById("geminiKeyInput").value = "";
     showBanner(t("gemini.saved"), "success");
     await refreshAll();
+  } else {
+    const data = await res.json();
+    showBanner(apiErrorText(data.detail, "gemini.saveFailed"), "error");
   }
 }
 

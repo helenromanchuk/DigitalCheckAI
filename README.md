@@ -79,9 +79,10 @@ python -m venv .venv
 Then open **http://localhost:8000** in your browser.
 
 ## Gemini API key
-1. Click **"Указать ключ Gemini API"** ("Set Gemini API key") in the top right corner of the dashboard, or set `GEMINI_API_KEY=...` in the `.env` file.
-2. The key is stored locally in `.env`.
-3. To see exactly what is sent to Gemini, add `LOG_LEVEL=DEBUG` to `.env` and restart the server. The console then shows every batch prompt, the raw JSON response, the call duration and token counts (the API key is never logged). The default level is `INFO`.
+1. Install or update dependencies with `python -m pip install -r requirements.txt`, then click **"Указать ключ Gemini API"** ("Set Gemini API key") in the top right corner of the dashboard.
+2. The key is saved in the operating system's credential store: Windows Credential Locker, macOS Keychain, or Linux Secret Service. Saving requires an available, unlocked credential store; plaintext storage is never used as a fallback. On first use, existing `GEMINI_API_KEY` assignments in `.env` are migrated and removed only after secure storage succeeds. Other settings remain in `.env`.
+3. For headless use, inject `GEMINI_API_KEY` into the server process environment using your secret manager. A saved credential takes precedence over the environment. Do not put real keys in `.env`; migrate any existing key on a system with an available credential store first. Credentials previously stored in `.env` may remain in old backups; rotate those keys in Google AI Studio and save the replacement in the dashboard.
+4. To see exactly what is sent to Gemini, add `LOG_LEVEL=DEBUG` to `.env` and restart the server. The console then shows every batch prompt, the raw JSON response, the call duration and token counts (the API key is never logged). The default level is `INFO`.
 
 ## Running tests
 ```powershell

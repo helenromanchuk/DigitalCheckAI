@@ -171,6 +171,7 @@ const I18N = {
     "error.category_empty": "Введите название категории.",
     "error.category_not_english": "Название «{name}» должно быть на английском: его получает Gemini. Русское название укажите во втором поле.",
     "error.unknown": "{message}",
+    "error.credential_store_unavailable": "Не удалось открыть защищённое хранилище ключей или удалить старый ключ из .env. Разблокируйте системное хранилище, проверьте права доступа к .env и повторите попытку.",
     "sync.success": "Успешно загружено чеков: {fetched} (новых: {inserted}). Расшифровано новых Item#: {newItems} ({provider}).",
 
     "import.importing": "Импортируем файл {file}...",
@@ -184,6 +185,7 @@ const I18N = {
     "gemini.reclassify": "Переклассифицировать ожидающие товары",
     "gemini.saving": "Сохраняем ключ Gemini API и расшифровываем ожидающие товары...",
     "gemini.saved": "Ключ Gemini API сохранён! Новые артикулы расшифрованы.",
+    "gemini.saveFailed": "Не удалось сохранить ключ Gemini API.",
     "gemini.classifying": "Запускаем классификацию через Gemini API...",
     "gemini.processed": "Обработано товаров: {count} ({provider}).",
 
@@ -387,6 +389,7 @@ const I18N = {
     "error.category_empty": "Please enter a category name.",
     "error.category_not_english": "“{name}” must be in English: Gemini receives this name. Put the Russian name in the second field.",
     "error.unknown": "{message}",
+    "error.credential_store_unavailable": "Could not access secure credential storage or remove the legacy .env key. Unlock your OS credential store, check .env permissions, and retry.",
     "sync.success": "Receipts downloaded: {fetched} (new: {inserted}). New Item #s decoded: {newItems} ({provider}).",
 
     "import.importing": "Importing {file}...",
@@ -400,6 +403,7 @@ const I18N = {
     "gemini.reclassify": "Reclassify pending items",
     "gemini.saving": "Saving the Gemini API key and decoding pending items...",
     "gemini.saved": "Gemini API key saved! New items have been decoded.",
+    "gemini.saveFailed": "Could not save the Gemini API key.",
     "gemini.classifying": "Starting classification with the Gemini API...",
     "gemini.processed": "Items processed: {count} ({provider}).",
 

@@ -83,7 +83,7 @@ def update_gemini_key(
     payload: SetGeminiKeyRequest,
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
-    """Saves GEMINI_API_KEY to .env and classifies pending items."""
+    """Saves the Gemini API key in the native credential store and classifies pending items."""
     save_gemini_api_key(payload.api_key)
     pending = db.get_pending_items_for_gemini()
     classifier = GeminiItemClassifier(db)

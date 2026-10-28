@@ -1,13 +1,21 @@
 """DigitalCheckAI configuration."""
 import os
 import re
+import sys
 from pathlib import Path
+from threading import RLock
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, unset_key
+from keyring.backend import KeyringBackend
+
+from app.errors import AppError
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 ENV_PATH = BASE_DIR / ".env"
-load_dotenv(ENV_PATH)
+# Do not copy legacy plaintext credentials into the process environment.
+for _name, _value in dotenv_values(ENV_PATH).items():
+    if _name != "GEMINI_API_KEY" and _value is not None:
+        os.environ.setdefault(_name, _value)
 
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -148,30 +156,82 @@ def is_english_category_name(name: str) -> bool:
     return bool(name.strip()) and not _CYRILLIC_RE.search(name)
 
 
+_CREDENTIAL_SERVICE = "DigitalCheckAI"
+_CREDENTIAL_ACCOUNT = "GEMINI_API_KEY"
+_CREDENTIAL_LOCK = RLock()
+
+
+class CredentialStoreError(AppError):
+    """A credential failure with no secret or backend exception in its message."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "credential_store_unavailable",
+            "Could not access secure credential storage or remove the legacy .env key. "
+            "Unlock your operating system credential store and check .env permissions, then retry. "
+            "An injected GEMINI_API_KEY environment variable can be used without saving it.",
+        )
+
+
+def _credential_store() -> KeyringBackend:
+    """Select a native secure backend directly, bypassing configurable plaintext plugins."""
+    if sys.platform == "win32":
+        from keyring.backends.Windows import WinVaultKeyring
+
+        return WinVaultKeyring()
+    if sys.platform == "darwin":
+        from keyring.backends.macOS import Keyring
+
+        return Keyring()
+    if sys.platform.startswith("linux"):
+        from keyring.backends.SecretService import Keyring
+
+        return Keyring()
+    raise CredentialStoreError()
+
+
+def _remove_legacy_gemini_key() -> None:
+    """Remove every legacy assignment, including quoted, multiline and exported values."""
+    if "GEMINI_API_KEY" in dotenv_values(ENV_PATH):
+        removed, _ = unset_key(ENV_PATH, "GEMINI_API_KEY")
+        if not removed:
+            raise CredentialStoreError()
+
+
 def get_gemini_api_key() -> str:
-    """Returns the current GEMINI_API_KEY from the environment or the .env file."""
-    load_dotenv(ENV_PATH, override=True)
-    return os.getenv("GEMINI_API_KEY", "").strip()
+    """Read the native credential store, migrating old .env keys; allow injected environment keys."""
+    with _CREDENTIAL_LOCK:
+        legacy = (dotenv_values(ENV_PATH).get("GEMINI_API_KEY") or "").strip()
+        try:
+            store = _credential_store()
+            saved = store.get_password(_CREDENTIAL_SERVICE, _CREDENTIAL_ACCOUNT)
+        except Exception:
+            # Headless systems may inject a key instead of using a desktop keychain.
+            if legacy and legacy != "your_gemini_api_key_here":
+                raise CredentialStoreError() from None
+            return os.getenv("GEMINI_API_KEY", "").strip()
+        if legacy:
+            if not saved and legacy != "your_gemini_api_key_here":
+                save_gemini_api_key(legacy)
+                return legacy
+            try:
+                _remove_legacy_gemini_key()
+            except Exception:
+                raise CredentialStoreError() from None
+        return (saved or os.getenv("GEMINI_API_KEY", "")).strip()
 
 
 def save_gemini_api_key(api_key: str) -> None:
-    """Saves GEMINI_API_KEY to the local .env file and updates the environment."""
+    """Persist only in native secure storage; remove legacy plaintext after a successful write."""
     clean_key = api_key.strip()
-    os.environ["GEMINI_API_KEY"] = clean_key
-
-    lines: list[str] = []
-    found = False
-    if ENV_PATH.exists():
-        for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
-            if line.strip().startswith("GEMINI_API_KEY="):
-                lines.append(f"GEMINI_API_KEY={clean_key}")
-                found = True
-            else:
-                lines.append(line)
-    if not found:
-        lines.append(f"GEMINI_API_KEY={clean_key}")
-
-    ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if not clean_key:
+        raise ValueError("The Gemini API key must not be empty.")
+    with _CREDENTIAL_LOCK:
+        try:
+            _credential_store().set_password(_CREDENTIAL_SERVICE, _CREDENTIAL_ACCOUNT, clean_key)
+            _remove_legacy_gemini_key()
+        except Exception:
+            raise CredentialStoreError() from None
 
 
 def get_gemini_model() -> str:
