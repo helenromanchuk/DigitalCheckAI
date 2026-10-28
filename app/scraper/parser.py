@@ -3,6 +3,7 @@ import re
 from typing import Any
 
 from app.config import FUEL_CATEGORY, OTHER_CATEGORY
+from app.money import allocate_cents
 from app.receipt_tax import is_crv_line
 
 # Names for items the parser categorizes itself. Product names are stored in English, like the names
@@ -85,10 +86,7 @@ def spread_discount(items: list[dict[str, Any]], amount: float, base_key: str) -
     base = sum(i[base_key] for i in allocatable)
     if amount <= 0 or base <= 0:
         return 0.0
-    remaining = amount
-    for n, item in enumerate(allocatable, start=1):
-        share = remaining if n == len(allocatable) else round(amount * item[base_key] / base, 2)
-        remaining = round(remaining - share, 2)
+    for item, share in zip(allocatable, allocate_cents(amount, [i[base_key] for i in allocatable]), strict=True):
         item["discount_amount"] = round(item["discount_amount"] + share, 2)
         item["net_amount"] = round(item["net_amount"] - share, 2)
     return amount
@@ -272,7 +270,9 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
                 "gross_amount": 0.0,
                 "discount_amount": disc_val,
                 "net_amount": -disc_val,
-                "tax_flag": str(raw_item.get("taxFlag") or ""),
+                # A coupon for an item that isn't on the receipt changes no line's taxable amount, so without
+                # a flag of its own it counts as untaxed and doesn't stop the receipt's tax from being split
+                "tax_flag": str(raw_item.get("taxFlag") or "N"),
                 "is_weight": False,
                 "default_category": OTHER_CATEGORY,
                 "default_clean_name": f"{COUPON_NAME_PREFIX}{desc})",
@@ -387,9 +387,10 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
 
     # getOrderDetails has no per-line tax flag, only the order's tax. With a single item that tax is all its own;
     # with several it can't be told which are taxable (groceries aren't), so the tax isn't split per item.
-    # Fees aren't items, so with a fee on the order its tax may be the fee's. A flag the line does carry
-    # (e.g. in an imported file) is kept
-    if len(normalized_items) == 1 and not normalized_items[0]["tax_flag"] and not fees:
+    # Fees and shipping aren't items, so when the order has them its tax may be theirs. A flag the line does
+    # carry (e.g. in an imported file) is kept
+    has_charges = bool(fees) or bool(_to_float(raw_order.get("shippingAndHandling") or raw_order.get("shippingTotal"), 0.0))
+    if len(normalized_items) == 1 and not normalized_items[0]["tax_flag"] and not has_charges:
         normalized_items[0]["tax_flag"] = "Y"
 
     # getOrderDetails only returns the discount at the order level; spread it across items

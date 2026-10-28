@@ -7,6 +7,8 @@ import re
 from bisect import bisect_left
 from typing import Any
 
+from app.money import allocate_cents
+
 # A California bottle deposit (CRV) line: "CA REDEMP VAL T EI/919140" is the deposit for item 919140; "T" means
 # the deposit itself is taxed, "N" that it isn't. Truncated wordings ("CA REDEMP VA"), a marker glued to the
 # code ("TEI/") and text after the item number are allowed; the marker and the item number may be missing
@@ -37,31 +39,41 @@ def is_crv_line(raw_description: str | None) -> bool:
 
 
 def _taxable(row: dict[str, Any], crv: tuple[str | None, bool | None] | None) -> bool | None:
-    """Whether a line is taxed: a deposit by its T/N marker, other lines by their Y/N flag; None when unknown."""
-    if crv is not None:
+    """Whether a line is taxed: a deposit by its T/N marker, else by its Y/N flag; None when neither says."""
+    if crv is not None and crv[1] is not None:
         return crv[1]
     flag = str(row.get("tax_flag") or "").upper()
     return True if flag == "Y" else False if flag == "N" else None
 
 
-def crv_owners(items: list[dict[str, Any]]) -> dict[int, int]:
+def _item_key(item_number: Any) -> str:
+    """Item number as a CRV description refers to it: "0919140" and "919140" are the same item."""
+    return str(item_number or "").strip().lstrip("0") or "0"
+
+
+def crv_owners(
+    items: list[dict[str, Any]], infos: list[tuple[str | None, bool | None] | None] | None = None
+) -> dict[int, int]:
     """Maps the index of each CRV line to the index of the receipt line it belongs to.
 
     The owner is the nearest earlier line with the linked item number that has no CRV yet ("wine, wine, CRV, CRV"
     gives each bottle one deposit), else the first later one without a CRV, else the nearest line of the item.
     Lines whose amount has the CRV's sign come first, so a refunded deposit goes to the returned bottle. A CRV line
-    without an item number, or whose item isn't on the receipt, has no owner.
+    without an item number, or whose item isn't on the receipt, has no owner. infos are the lines' parsed CRV
+    descriptions when the caller already has them.
     """
-    links = {i: info[0] for i, row in enumerate(items) if (info := _crv_info(row.get("raw_description")))}
+    if infos is None:
+        infos = [_crv_info(row.get("raw_description")) for row in items]
+    links = {i: info[0] for i, info in enumerate(infos) if info is not None}
     lines_by_item: dict[str, list[int]] = {}
     for i, row in enumerate(items):
         if i not in links:
-            lines_by_item.setdefault(str(row.get("item_number")), []).append(i)
+            lines_by_item.setdefault(_item_key(row.get("item_number")), []).append(i)
 
     owners: dict[int, int] = {}
     claimed: set[int] = set()
     for index, item_number in links.items():
-        candidates = lines_by_item.get(item_number) if item_number else None
+        candidates = lines_by_item.get(_item_key(item_number)) if item_number else None
         if not candidates:
             continue
         refund = float(items[index].get("net_amount") or 0.0) < 0
@@ -90,13 +102,13 @@ def split_receipt(lines: list[dict[str, Any]], receipt_tax: float) -> list[dict[
     per item, so the tax is split in proportion to the net amount of taxable lines (a taxable deposit counts
     towards its item) and rounded to cents so the parts add up to the receipt's tax.
 
-    The tax is split only when the taxability of every line is known (no line without a Y/N flag or T/N marker)
+    The tax is split only when the taxability of every line is known (a deposit's T/N marker, else a Y/N flag)
     and the implied rate is plausible (at most MAX_TAX_RATE). Otherwise tax_amount is None and tax_unsplit is True
     on the lines that may carry some of the tax: a total with tax can't be shown for them. A tax-free receipt has
     nothing to split, so its lines get None too, not a computed $0.00. A folded CRV line gets None, 0 and False.
     """
     infos = [_crv_info(line.get("raw_description")) for line in lines]
-    owners = crv_owners(lines)
+    owners = crv_owners(lines, infos)
     kept = [i for i in range(len(lines)) if i not in owners]
 
     crv = {i: 0.0 for i in kept}
@@ -123,14 +135,9 @@ def split_receipt(lines: list[dict[str, Any]], receipt_tax: float) -> list[dict[
     )
     taxes: dict[int, float | None] = {i: None for i in kept}
     if split:
+        # Rounded to cents, with the remainder on the last taxed line, so the column adds up to the receipt's tax
         taxed = [i for i in kept if base[i] != 0.0]
-        for i in taxed:
-            taxes[i] = round(tax * base[i] / base_total, 2)
-        # Rounding leftovers go to the line with the largest base, so the column adds up to the receipt's tax
-        leftover = round(tax - sum(taxes[i] for i in taxed), 2)
-        if leftover and taxed:
-            biggest = max(taxed, key=lambda i: abs(base[i]))
-            taxes[biggest] = round(taxes[biggest] + leftover, 2)
+        taxes.update(zip(taxed, allocate_cents(tax, [base[i] for i in taxed]), strict=True))
 
     results = []
     for i in range(len(lines)):

@@ -26,6 +26,7 @@ from app.unit_price import add_unit_prices
 REPARSE_SCHEMA_VERSION = 1
 ENGLISH_NAMES_SCHEMA_VERSION = 2
 CRV_SCHEMA_VERSION = 3
+TAX_SPLIT_SCHEMA_VERSION = 4
 
 
 def _category_reserved(value: str) -> AppError:
@@ -176,17 +177,34 @@ class Database:
 
         if schema_version < CRV_SCHEMA_VERSION:
             # Migration: CRV catalog rows now get a parser category instead of going to Gemini, and online
-            # orders with several items no longer mark every line taxable. Re-parse once, unless the
-            # re-parse above already ran with the current parsers
+            # orders with several items no longer mark every line taxable. Online orders the re-parse below
+            # can't redo (no usable raw_json) lose the old flag here, so their tax isn't split over groceries.
+            # Re-parse once, unless the re-parse above already ran with the current parsers
+            with self.connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE receipt_items SET tax_flag = ''
+                    WHERE transaction_barcode IN (
+                        SELECT ri.transaction_barcode
+                        FROM receipt_items ri
+                        JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
+                        WHERE r.receipt_type = 'online'
+                        GROUP BY ri.transaction_barcode
+                        HAVING COUNT(*) > 1
+                    )
+                    """
+                )
             if schema_version >= REPARSE_SCHEMA_VERSION:
                 self.reparse_stored_receipts()
             with self.connect() as conn:
                 conn.execute(f"PRAGMA user_version = {CRV_SCHEMA_VERSION}")
 
-        # Receipts saved before the tax split was stored, and not re-parsed above, get it now. Re-parsed
-        # receipts already have it, so each receipt is split once
-        with self.connect() as conn:
-            self._split_stored_receipts(conn)
+        if schema_version < TAX_SPLIT_SCHEMA_VERSION:
+            # Migration: receipts saved before the tax split was stored, and not re-parsed above, get it now.
+            # Re-parsed receipts already have it, so each receipt is split once
+            with self.connect() as conn:
+                self._split_stored_receipts(conn)
+                conn.execute(f"PRAGMA user_version = {TAX_SPLIT_SCHEMA_VERSION}")
 
     @classmethod
     def _split_stored_receipts(cls, conn: sqlite3.Connection) -> None:

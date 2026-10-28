@@ -167,7 +167,7 @@ def test_online_order_tax_is_split_only_for_a_single_item():
 def test_upgrade_reparses_so_pending_crv_rows_leave_the_gemini_queue(tmp_path):
     import sqlite3
 
-    from app.database import CRV_SCHEMA_VERSION, ENGLISH_NAMES_SCHEMA_VERSION, Database
+    from app.database import ENGLISH_NAMES_SCHEMA_VERSION, TAX_SPLIT_SCHEMA_VERSION, Database
     from app.scraper.parser import parse_any_costco_payload
 
     path = tmp_path / "upgrade.db"
@@ -196,7 +196,7 @@ def test_upgrade_reparses_so_pending_crv_rows_leave_the_gemini_queue(tmp_path):
     db.init_db()
     assert "1254" not in [i["item_number"] for i in db.get_pending_items_for_gemini()]
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == CRV_SCHEMA_VERSION
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == TAX_SPLIT_SCHEMA_VERSION
 
 
 def test_unsplit_tax_is_flagged_on_the_receipt_and_the_item_total(tmp_path):
@@ -462,3 +462,47 @@ def test_old_database_drops_crv_for_item_and_gets_the_split_stored(tmp_path):
     (wine,) = db.get_receipts_list()[0]["items"]
     assert (wine["tax_amount"], wine["crv_amount"], wine["tax_crv"]) == (0.51, 0.10, 0.61)
     assert db.get_statistics()["by_category"][0]["net_spent"] == 5.09
+
+
+def test_deposit_without_a_marker_falls_back_to_its_flag():
+    items = [_item("919140", "MILESTONE", 4.99, "Y"), _item("1254", "CA REDEMP VAL /919140", 0.10, "Y")]
+    (wine,) = add_tax_and_crv(items, 0.51)
+    assert wine["tax_amount"] == 0.51
+
+
+def test_zero_padded_item_number_still_gets_its_deposit():
+    items = [_item("0919140", "MILESTONE", 4.99, "Y"), _item("1254", "CA REDEMP VAL T EI/919140", 0.10)]
+    assert crv_owners(items) == {1: 0}
+
+
+def test_unmatched_coupon_does_not_stop_the_split():
+    from app.scraper.parser import parse_warehouse_or_gas_receipt
+
+    parsed = parse_warehouse_or_gas_receipt(
+        {
+            "transactionBarcode": "1006",
+            "transactionDate": "2026-06-06",
+            "receiptType": "In-Warehouse",
+            "taxes": 1.0,
+            "itemArray": [
+                {"itemNumber": "777", "itemDescription01": "SOAP", "unit": 1, "amount": 10.0, "taxFlag": "Y"},
+                {"itemNumber": "999", "itemDescription01": "/ 5555555", "unit": 1, "amount": -2.0},
+            ],
+        }
+    )
+    soap = next(r for r in add_tax_and_crv(parsed["items"], 1.0) if r["item_number"] == "777")
+    assert soap["tax_amount"] == 1.0
+
+
+def test_single_item_online_order_with_shipping_is_not_taxed_per_item():
+    from app.scraper.parser import parse_online_order
+
+    order = {
+        "orderNumber": "1265538998",
+        "orderPlacedDate": "2026-02-23T09:41:21",
+        "orderTax": 1.0,
+        "shippingAndHandling": 15.0,
+        "orderLineItems": [{"itemNumber": "1", "itemDescription": "LAMP", "quantity": 1, "merchandiseTotal": 5.0}],
+    }
+    (lamp,) = parse_online_order(order)["items"]
+    assert lamp["tax_flag"] == ""
