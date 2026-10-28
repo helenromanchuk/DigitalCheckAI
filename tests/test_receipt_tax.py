@@ -58,9 +58,10 @@ def test_untaxed_crv_does_not_join_the_tax_base():
     assert water["tax_crv"] == 2.50
 
 
-def test_crv_without_its_item_stays_a_line():
+def test_crv_without_its_item_stays_a_line_shown_as_a_deposit():
     rows = add_tax_and_crv([_item("1254", "CA REDEMP VAL T EI/111", 0.10)], 0.0)
-    assert len(rows) == 1 and rows[0]["crv_amount"] == 0.0
+    assert len(rows) == 1
+    assert (rows[0]["crv_amount"], rows[0]["is_deposit"]) == (0.10, True)
 
 
 def test_tax_without_flags_is_not_split():
@@ -678,3 +679,72 @@ def test_oldest_database_resplits_online_orders_whose_flags_were_reset(tmp_path)
     tv, kiwi = db.get_receipts_list()[0]["items"]
     assert (tv["tax_amount"], kiwi["tax_amount"]) == (None, None)
     assert tv["tax_unsplit"] and kiwi["tax_unsplit"]
+
+
+def test_a_letter_glued_to_va_is_not_a_marker():
+    assert not is_crv_line("CA REDEMP VAN")
+    assert crv_owners([_item("919140", "MILESTONE", 4.99, "Y"), _item("1254", "CA REDEMP VALN/919140", 0.1)]) == {1: 0}
+
+
+def test_coupon_reference_with_leading_zeros_finds_the_returned_item():
+    from app.scraper.parser import parse_warehouse_or_gas_receipt
+
+    parsed = parse_warehouse_or_gas_receipt(
+        {
+            "transactionBarcode": "1011",
+            "transactionDate": "2026-06-11",
+            "receiptType": "In-Warehouse",
+            "itemArray": [
+                {"itemNumber": "5555555", "itemDescription01": "DRILL", "unit": -1, "amount": -20.0, "taxFlag": "Y"},
+                {"itemNumber": "999", "itemDescription01": "/ 05555555", "unit": 1, "amount": -3.0},
+            ],
+        }
+    )
+    coupon = next(i for i in parsed["items"] if i["item_number"].startswith("DISCOUNT-"))
+    assert coupon["tax_flag"] == "Y"
+
+
+def test_orphan_deposit_and_items_with_no_split_tax_in_the_views(tmp_path):
+    from app.database import Database
+
+    db = Database(tmp_path / "views.db")
+    db.init_db()
+    db.upsert_receipts(
+        [
+            {
+                "transaction_barcode": "SWY-1",
+                "transaction_date": "2026-06-12",
+                "receipt_type": "safeway",
+                "store": "safeway",
+                "tax": 0.5,
+                "items": [
+                    {"item_number": "SWY-1", "raw_description": "SOAP", "net_amount": 5.0, "gross_amount": 5.0},
+                    {"item_number": "1254", "raw_description": "CA REDEMP VAL N EE/111", "net_amount": 0.1, "gross_amount": 0.1},
+                ],
+            }
+        ]
+    )
+    soap, deposit = db.get_receipts_list()[0]["items"]
+    assert deposit["is_deposit"] and deposit["crv_amount"] == 0.1
+    (listed,) = db.get_items_summary()
+    assert listed["item_number"] == "SWY-1" and listed["tax_unknown"] is True
+    assert db.search_purchases("REDEMP") == []
+
+
+def test_catalog_rows_of_unparseable_receipts_get_the_crv_category(tmp_path):
+    import sqlite3
+
+    from app.database import ENGLISH_NAMES_SCHEMA_VERSION, Database
+    from app.scraper.parser import parse_any_costco_payload
+
+    path = tmp_path / "catalog.db"
+    db = Database(path)
+    db.init_db()
+    db.upsert_receipts(parse_any_costco_payload([_wine_receipt("1012")]))
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE item_catalog SET classified_by = 'pending' WHERE item_number = '1254'")
+        conn.execute("UPDATE receipts SET raw_json = '{}'")
+        conn.execute(f"PRAGMA user_version = {ENGLISH_NAMES_SCHEMA_VERSION}")
+
+    db.init_db()
+    assert "1254" not in [i["item_number"] for i in db.get_pending_items_for_gemini()]

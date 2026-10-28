@@ -3,6 +3,7 @@ import re
 from typing import Any
 
 from app.config import FUEL_CATEGORY, OTHER_CATEGORY
+from app.item_number import core_item_number
 from app.money import allocate_cents
 from app.receipt_tax import is_crv_line
 
@@ -93,6 +94,7 @@ def spread_discount(items: list[dict[str, Any]], amount: float, base_key: str) -
 
 
 def _mark_crv(item_entry: dict[str, Any]) -> None:
+    item_entry["is_crv"] = True
     # A bottle deposit takes the category of the item it is charged for, so it needs no classifying
     item_entry["default_category"] = OTHER_CATEGORY
     item_entry["default_clean_name"] = CRV_NAME
@@ -146,8 +148,10 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
         # The receipt is already in the normalized internal format
         if "gross_amount" in raw_item and "net_amount" in raw_item and "item_number" in raw_item:
             item_copy = dict(raw_item)
-            if not item_copy.get("default_category") and is_crv_line(item_copy.get("raw_description")):
-                _mark_crv(item_copy)
+            if is_crv_line(item_copy.get("raw_description")):
+                item_copy["is_crv"] = True
+                if not item_copy.get("default_category"):
+                    _mark_crv(item_copy)
             normalized_items.append(item_copy)
             continue
 
@@ -159,9 +163,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
             # If target_item_num isn't given, attach the coupon to the most recent item. A bottle deposit
             # isn't one: it follows its item on the receipt, and a coupon never discounts it
             if not target_item_num:
-                product = next(
-                    (i for i in reversed(normalized_items) if not is_crv_line(i.get("raw_description"))), None
-                )
+                product = next((i for i in reversed(normalized_items) if not i.get("is_crv")), None)
                 if product:
                     target_item_num = product["item_number"]
             pending_discounts.append((target_item_num, discount_val, raw_item))
@@ -261,7 +263,10 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
         # Its item can still be on the receipt as a return (a coupon is only applied to a sale): then the coupon
         # changes that item's taxable amount and is taxed like it. Otherwise it changes no line's taxable amount,
         # so without a flag of its own it counts as untaxed and doesn't stop the receipt's tax from being split
-        returned = next((i for i in normalized_items if target_num and i["item_number"] == target_num), None)
+        returned = next(
+            (i for i in normalized_items if target_num and core_item_number(i["item_number"]) == core_item_number(target_num)),
+            None,
+        )
         coupon_flag = str(raw_item.get("taxFlag") or (returned or {}).get("tax_flag") or "N")
         item_number = f"DISCOUNT-{coupon_ref}"
         desc = str(raw_item.get("itemDescription01") or "").strip() or f"DISCOUNT #{coupon_ref}"

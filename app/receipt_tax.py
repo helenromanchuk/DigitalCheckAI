@@ -12,15 +12,15 @@ from app.money import allocate_cents
 
 # Version of the rules below. The split is stored with each receipt (receipts.tax_split_version), and receipts
 # split by other rules are split again on startup, so bump this whenever a change here alters any result
-SPLIT_RULES_VERSION = 1
+SPLIT_RULES_VERSION = 2
 
 # A California bottle deposit (CRV) line: "CA REDEMP VAL T EI/919140" is the deposit for item 919140; "T" means
 # the deposit itself is taxed, "N" that it isn't. Truncated wordings ("CA REDEMP VA"), a marker glued to the
-# word or the code ("VALT", "TEI/") and text after the item number are allowed; the marker and the item number
-# may be missing
+# word "VAL" or to the code ("VALT", "TEI/") and text after the item number are allowed; the marker and the item
+# number may be missing. A letter glued to "VA" ("VAN") is part of a word, not a marker
 _CRV_RE = re.compile(
     r"^CA\s+REDEMP(?:TION)?\s+VA(?:LUE|L)?"
-    r"(?:\s*([TN])(?:\s*E[A-Z])?(?=[\s/]|$)|\b)"
+    r"(?:(?:\s+([TN])|(?<=L)([TN]))(?:\s*E[A-Z])?(?=[\s/]|$)|\b)"
     r"[^/]*(?:/\s*(\d+)\b)?",
     re.IGNORECASE,
 )
@@ -35,8 +35,8 @@ def _crv_info(raw_description: str | None) -> tuple[str | None, bool | None] | N
     match = _CRV_RE.match((raw_description or "").strip())
     if not match:
         return None
-    marker = match.group(1)
-    return match.group(2), (marker.upper() == "T") if marker else None
+    marker = match.group(1) or match.group(2)
+    return match.group(3), (marker.upper() == "T") if marker else None
 
 
 def is_crv_line(raw_description: str | None) -> bool:
@@ -99,7 +99,8 @@ def split_receipt(lines: list[dict[str, Any]], receipt_tax: float) -> list[dict[
     """Works out each line's CRV owner, tax share and deposit, in the order of the receipt's lines.
 
     Each result has crv_owner (index of the line a CRV line is folded into, else None), tax_amount, crv_amount
-    (deposits folded into this line) and tax_unsplit. Costco gives only the receipt's total tax and a Y/N flag
+    (deposits folded into this line, or a deposit's own amount when its item isn't on the receipt), is_deposit
+    and tax_unsplit. Costco gives only the receipt's total tax and a Y/N flag
     per item, so the tax is split in proportion to the net amount of taxable lines (a taxable deposit counts
     towards its item) and rounded to cents so the parts add up to the receipt's tax.
 
@@ -124,7 +125,8 @@ def split_receipt(lines: list[dict[str, Any]], receipt_tax: float) -> list[dict[
             # A deposit that states nothing is taxed like the bottle it is charged for
             taxable = _taxable(lines[target], infos[target])
         amount = float(lines[i].get("net_amount") or 0.0)
-        if i in owners:
+        if infos[i] is not None:
+            # A deposit is shown under Tax/CRV: on its bottle, or on its own line when the bottle isn't here
             crv[target] += amount
         if taxable is None:
             unknown = True
@@ -147,13 +149,16 @@ def split_receipt(lines: list[dict[str, Any]], receipt_tax: float) -> list[dict[
     results = []
     for i in range(len(lines)):
         if i in owners:
-            results.append({"crv_owner": owners[i], "tax_amount": None, "crv_amount": 0.0, "tax_unsplit": False})
+            results.append(
+                {"crv_owner": owners[i], "tax_amount": None, "crv_amount": 0.0, "is_deposit": True, "tax_unsplit": False}
+            )
         else:
             results.append(
                 {
                     "crv_owner": None,
                     "tax_amount": taxes[i],
                     "crv_amount": round(crv[i], 2),
+                    "is_deposit": infos[i] is not None,
                     "tax_unsplit": bool(tax) and not split and may_be_taxed[i],
                 }
             )

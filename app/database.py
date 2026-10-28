@@ -19,13 +19,18 @@ from app.config import (
     merge_category_labels_ru,
 )
 from app.errors import AppError
-from app.receipt_tax import SPLIT_RULES_VERSION, split_receipt
+from app.receipt_tax import SPLIT_RULES_VERSION, is_crv_line, split_receipt
 from app.unit_price import add_unit_prices
 
 # PRAGMA user_version after each one-time data migration (see init_db)
 REPARSE_SCHEMA_VERSION = 1
 ENGLISH_NAMES_SCHEMA_VERSION = 2
 CRV_SCHEMA_VERSION = 3
+
+# The catalog row a receipt line counts under: a deposit folded into a bottle counts under the bottle's item
+_CATALOG_OF_LINE = """
+                LEFT JOIN receipt_items owner ON owner.id = ri.crv_owner_id
+                JOIN item_catalog c ON c.item_number = COALESCE(owner.item_number, ri.item_number)"""
 
 
 def _category_reserved(value: str) -> AppError:
@@ -158,11 +163,34 @@ class Database:
                 conn.execute("ALTER TABLE receipt_items ADD COLUMN tax_amount REAL")
                 conn.execute("ALTER TABLE receipt_items ADD COLUMN crv_amount REAL NOT NULL DEFAULT 0.0")
                 conn.execute("ALTER TABLE receipt_items ADD COLUMN tax_unsplit INTEGER")
+            if "is_deposit" not in item_columns:
+                # A CRV line, folded into its bottle or not: never listed as a product
+                conn.execute("ALTER TABLE receipt_items ADD COLUMN is_deposit INTEGER NOT NULL DEFAULT 0")
             if "crv_for_item" in item_columns:
                 # An earlier version also stored the owner's item number, which crv_owner_id already gives
                 conn.execute("ALTER TABLE receipt_items DROP COLUMN crv_for_item")
             self._merge_categories_clashing_with_defaults(conn)
             schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
+
+        if schema_version < CRV_SCHEMA_VERSION:
+            # Migration: online orders with several items no longer mark every line taxable. The old parser's
+            # all-"Y" flags are reset before any re-parse below, which gives back the flags an order really has
+            # (from its raw_json); an order it can't redo keeps no flags, so its tax isn't split over groceries.
+            # An order with any other flag got it from an imported file and keeps it. Their stored split came
+            # from the old flags, so they are split again at the end
+            all_taxable_online = """
+                SELECT ri.transaction_barcode
+                FROM receipt_items ri
+                JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
+                WHERE r.receipt_type = 'online'
+                GROUP BY ri.transaction_barcode
+                HAVING COUNT(*) > 1 AND MIN(ri.tax_flag) = 'Y' AND MAX(ri.tax_flag) = 'Y'
+            """
+            with self.connect() as conn:
+                conn.execute(
+                    f"UPDATE receipts SET tax_split_version = NULL WHERE transaction_barcode IN ({all_taxable_online})"
+                )
+                conn.execute(f"UPDATE receipt_items SET tax_flag = '' WHERE transaction_barcode IN ({all_taxable_online})")
 
         if schema_version < REPARSE_SCHEMA_VERSION:
             # Migration: receipts stored by older parsers have wrong receipt types, coupon lines and
@@ -178,34 +206,40 @@ class Database:
                 conn.execute(f"PRAGMA user_version = {ENGLISH_NAMES_SCHEMA_VERSION}")
 
         if schema_version < CRV_SCHEMA_VERSION:
-            # Migration: CRV catalog rows now get a parser category instead of going to Gemini, and online
-            # orders with several items no longer mark every line taxable. Online orders the re-parse below
-            # can't redo (no usable raw_json) lose the old all-"Y" flags here, so their tax isn't split over
-            # groceries; an order with any other flag got it from an imported file and keeps it.
-            # Re-parse once, unless the re-parse above already ran with the current parsers
-            # Their stored split came from the old flags, so they are split again below
-            all_taxable_online = """
-                SELECT ri.transaction_barcode
-                FROM receipt_items ri
-                JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
-                WHERE r.receipt_type = 'online'
-                GROUP BY ri.transaction_barcode
-                HAVING COUNT(*) > 1 AND MIN(ri.tax_flag) = 'Y' AND MAX(ri.tax_flag) = 'Y'
-            """
-            with self.connect() as conn:
-                conn.execute(
-                    f"UPDATE receipts SET tax_split_version = NULL WHERE transaction_barcode IN ({all_taxable_online})"
-                )
-                conn.execute(f"UPDATE receipt_items SET tax_flag = '' WHERE transaction_barcode IN ({all_taxable_online})")
+            # Migration: CRV catalog rows get a parser category instead of going to Gemini, and online orders
+            # get their new flags. Re-parse once, unless the re-parse above already ran with the current
+            # parsers. Catalog rows of receipts the re-parse can't redo (no usable raw_json) are fixed directly
             if schema_version >= REPARSE_SCHEMA_VERSION:
                 self.reparse_stored_receipts()
             with self.connect() as conn:
+                self._mark_crv_catalog_rows(conn)
                 conn.execute(f"PRAGMA user_version = {CRV_SCHEMA_VERSION}")
 
         # Receipts not yet split, or split by older rules (an earlier build, or before SPLIT_RULES_VERSION was
         # bumped), are split with the current ones. Re-parsed receipts were split on saving, so each is done once
         with self.connect() as conn:
             self._split_outdated_receipts(conn)
+
+    @staticmethod
+    def _mark_crv_catalog_rows(conn: sqlite3.Connection) -> None:
+        """Gives CRV catalog rows the parser's category, as the parser does for new ones (see parser._mark_crv)."""
+        # Imported here to keep the storage layer from loading the scrapers on every import
+        from app.scraper.parser import CRV_NAME
+
+        rows = conn.execute(
+            "SELECT item_number, raw_description FROM item_catalog "
+            "WHERE is_manual_override = 0 AND classified_by != 'parser' AND raw_description LIKE 'CA REDEMP%'"
+        ).fetchall()
+        now = datetime.now(UTC).isoformat()
+        conn.executemany(
+            """
+            UPDATE item_catalog
+            SET clean_name = CASE WHEN classified_by = 'gemini' THEN clean_name ELSE ? END,
+                category = ?, classified_by = 'parser', updated_at = ?
+            WHERE item_number = ?
+            """,
+            [(CRV_NAME, OTHER_CATEGORY, now, row["item_number"]) for row in rows if is_crv_line(row["raw_description"])],
+        )
 
     @classmethod
     def _split_outdated_receipts(cls, conn: sqlite3.Connection) -> None:
@@ -238,12 +272,14 @@ class Database:
         The caller marks the receipt with SPLIT_RULES_VERSION.
         """
         conn.executemany(
-            "UPDATE receipt_items SET crv_owner_id = ?, tax_amount = ?, crv_amount = ?, tax_unsplit = ? WHERE id = ?",
+            "UPDATE receipt_items SET crv_owner_id = ?, tax_amount = ?, crv_amount = ?, is_deposit = ?, tax_unsplit = ?"
+            " WHERE id = ?",
             [
                 (
                     lines[split["crv_owner"]]["id"] if split["crv_owner"] is not None else None,
                     split["tax_amount"],
                     split["crv_amount"],
+                    1 if split["is_deposit"] else 0,
                     1 if split["tax_unsplit"] else 0,
                     line["id"],
                 )
@@ -838,15 +874,14 @@ class Database:
                 f"""
                 SELECT
                     c.category AS category,
-                    COUNT(CASE WHEN ri.crv_owner_id IS NULL THEN ri.id END) AS line_count,
+                    COUNT(CASE WHEN ri.is_deposit = 0 THEN ri.id END) AS line_count,
                     COUNT(DISTINCT COALESCE(owner.item_number, ri.item_number)) AS unique_items,
                     ROUND(COALESCE(SUM(ri.gross_amount), 0.0), 2) AS gross_spent,
                     ROUND(COALESCE(SUM(ri.discount_amount), 0.0), 2) AS discount_saved,
                     ROUND(COALESCE(SUM(ri.net_amount), 0.0), 2) AS net_spent
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
-                LEFT JOIN receipt_items owner ON owner.id = ri.crv_owner_id
-                JOIN item_catalog c ON c.item_number = COALESCE(owner.item_number, ri.item_number)
+                {_CATALOG_OF_LINE}
                 WHERE {where_sql}
                 GROUP BY c.category
                 ORDER BY net_spent DESC
@@ -862,8 +897,7 @@ class Database:
                     ROUND(COALESCE(SUM(ri.net_amount), 0.0), 2) AS net_spent
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
-                LEFT JOIN receipt_items owner ON owner.id = ri.crv_owner_id
-                JOIN item_catalog c ON c.item_number = COALESCE(owner.item_number, ri.item_number)
+                {_CATALOG_OF_LINE}
                 WHERE {where_sql}
                 GROUP BY year_month, c.category
                 ORDER BY year_month ASC, net_spent DESC
@@ -935,7 +969,7 @@ class Database:
         where_sql, params = self._build_receipt_filter(start_date, end_date, receipt_type, store)
         # A CRV line is a deposit for another item, not a product of its own: it shows in its item's Tax/CRV
         # and Total (crv_amount), not in Net, while the category stats count it in the item's category
-        where_sql += " AND ri.crv_owner_id IS NULL "
+        where_sql += " AND ri.is_deposit = 0 "
         if category and category != "all":
             where_sql += " AND c.category = ? "
             params.append(category)
@@ -969,6 +1003,7 @@ class Database:
                     ROUND(COALESCE(SUM(ri.crv_amount), 0.0), 2) AS crv_amount,
                     ROUND(COALESCE(SUM(ri.tax_amount), 0.0) + COALESCE(SUM(ri.crv_amount), 0.0), 2) AS tax_crv,
                     MAX(COALESCE(ri.tax_unsplit, 0)) AS tax_partial,
+                    MIN(COALESCE(ri.tax_unsplit, 0)) AS tax_unknown,
                     MAX(substr(r.transaction_date, 1, 10)) AS last_purchased
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
@@ -982,8 +1017,10 @@ class Database:
         result = []
         for r in rows:
             item = add_unit_prices(dict(r), "net_spent", "total_quantity")
-            # Some purchase's tax couldn't be split, so the item's total with tax is incomplete
+            # Some purchase's tax couldn't be split, so the item's total with tax is incomplete; when none of
+            # them could be split there is no total with tax at all
             item["tax_partial"] = bool(item["tax_partial"])
+            item["tax_unknown"] = bool(item["tax_unknown"])
             result.append(item)
         return result
 
@@ -1015,7 +1052,7 @@ class Database:
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
                 JOIN item_catalog c ON c.item_number = ri.item_number
-                WHERE ri.crv_owner_id IS NULL
+                WHERE ri.is_deposit = 0
                   AND (casefold(ri.item_number) LIKE ?
                    OR casefold(ri.raw_description) LIKE ?
                    OR casefold(c.clean_name) LIKE ?)
@@ -1076,6 +1113,7 @@ class Database:
                         ri.net_amount,
                         ri.tax_amount,
                         ri.crv_amount,
+                        ri.is_deposit,
                         ROUND(COALESCE(ri.tax_amount, 0.0) + ri.crv_amount, 2) AS tax_crv,
                         COALESCE(ri.tax_unsplit, 0) AS tax_unsplit
                     FROM receipt_items ri
@@ -1089,6 +1127,7 @@ class Database:
                 for row in items:
                     item = add_unit_prices(dict(row), "net_amount", "quantity")
                     item["tax_unsplit"] = bool(item["tax_unsplit"])
+                    item["is_deposit"] = bool(item["is_deposit"])
                     rec_dict["items"].append(item)
                 result.append(rec_dict)
             return result
@@ -1181,12 +1220,11 @@ class Database:
                     COALESCE(SUM(CASE WHEN r.receipt_type != 'gas' THEN ri.net_amount ELSE 0.0 END), 0.0) AS non_gas_items_net,
                     COALESCE(SUM(CASE WHEN r.receipt_type = 'gas' THEN ri.net_amount ELSE 0.0 END), 0.0) AS gas_items_net,
                     -- A deposit on a bottle stays in the reward base, as before deposits were linked to items
-                    COALESCE(SUM(CASE WHEN r.receipt_type != 'gas' AND c.category = ? AND ri.crv_owner_id IS NULL
+                    COALESCE(SUM(CASE WHEN r.receipt_type != 'gas' AND c.category = ? AND ri.is_deposit = 0
                                       THEN ri.net_amount ELSE 0.0 END), 0.0) AS alcohol_items_net
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
-                LEFT JOIN receipt_items owner ON owner.id = ri.crv_owner_id
-                JOIN item_catalog c ON c.item_number = COALESCE(owner.item_number, ri.item_number)
+                {_CATALOG_OF_LINE}
                 WHERE {where_sql}
                 """,
                 [ALCOHOL_CATEGORY, *params],
