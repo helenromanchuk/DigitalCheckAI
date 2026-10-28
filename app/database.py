@@ -182,7 +182,7 @@ class Database:
     def _link_crv_lines(cls, conn: sqlite3.Connection) -> None:
         """Links the CRV lines of every stored receipt to the lines they belong to (a one-time migration)."""
         rows = conn.execute(
-            "SELECT id, transaction_barcode, item_number, raw_description FROM receipt_items "
+            "SELECT id, transaction_barcode, item_number, raw_description, net_amount FROM receipt_items "
             "ORDER BY transaction_barcode, id"
         ).fetchall()
         for _, group in groupby(rows, key=lambda row: row["transaction_barcode"]):
@@ -707,7 +707,14 @@ class Database:
                             1 if line.get("is_weight") else 0,
                         ),
                     )
-                    inserted_lines.append({"id": cursor.lastrowid, "item_number": item_num, "raw_description": raw_desc})
+                    inserted_lines.append(
+                        {
+                            "id": cursor.lastrowid,
+                            "item_number": item_num,
+                            "raw_description": raw_desc,
+                            "net_amount": float(line.get("net_amount", 0.0)),
+                        }
+                    )
                 self._save_crv_links(conn, inserted_lines)
 
         return {

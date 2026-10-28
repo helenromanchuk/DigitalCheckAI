@@ -272,3 +272,62 @@ def test_untaxed_lines_keep_their_total_when_the_tax_is_not_split():
     tv, tv_return, kiwi = add_tax_and_crv(items, 0.83)
     assert tv["tax_unsplit"] and tv_return["tax_unsplit"]
     assert kiwi["tax_unsplit"] is False
+
+
+def test_coupon_after_normalized_lines_without_description_does_not_crash():
+    from app.scraper.parser import parse_warehouse_or_gas_receipt
+
+    parsed = parse_warehouse_or_gas_receipt(
+        {
+            "transactionBarcode": "1005",
+            "transactionDate": "2026-06-05",
+            "receiptType": "In-Warehouse",
+            "itemArray": [
+                {"item_number": "777", "gross_amount": 10.0, "net_amount": 10.0, "discount_amount": 0.0},
+                {"itemNumber": "999", "itemDescription01": "INSTANT SAVINGS", "unit": -1, "amount": -2.0},
+            ],
+        }
+    )
+    assert parsed["items"][0]["item_number"] == "777"
+
+
+def test_untaxed_item_with_a_taxable_deposit_is_marked_unsplit():
+    items = [
+        _item("1", "TV", 100.00, "Y"),
+        _item("1", "TV RETURN", -99.99, "Y"),
+        _item("729441", "WATER", 5.0, "N"),
+        _item("1254", "CA REDEMP VAL T EI/729441", 0.10),
+    ]
+    rows = add_tax_and_crv(items, 0.83)
+    water = next(r for r in rows if r["item_number"] == "729441")
+    assert water["tax_unsplit"] is True
+
+
+def test_refunded_deposit_goes_to_the_returned_bottle():
+    items = [
+        _item("919140", "MILESTONE", 12.99, "Y"),
+        _item("919140", "MILESTONE RETURN", -12.99, "Y"),
+        _item("1254", "CA REDEMP VAL T EI/919140", 0.10),
+        _item("1254", "CA REDEMP VAL T EI/919140", -0.10),
+    ]
+    assert crv_owners(items) == {2: 0, 3: 1}
+
+
+def test_lines_without_ids_are_not_taken_for_crv():
+    rows = _add_tax_and_crv([_item("1", "SOAP", 6.0, "Y"), _item("2", "TOWEL", 4.0, "Y")], 1.0)
+    assert [r["item_number"] for r in rows] == ["1", "2"]
+
+
+def test_online_line_keeps_its_own_tax_flag():
+    from app.scraper.parser import parse_online_order
+
+    order = {
+        "orderNumber": "1265538996",
+        "orderPlacedDate": "2026-02-21T09:41:21",
+        "orderTax": 1.0,
+        "orderLineItems": [
+            {"itemNumber": "1", "itemDescription": "TV", "quantity": 1, "merchandiseTotal": 10.0, "taxFlag": "Y"},
+            {"itemNumber": "2", "itemDescription": "KIWI", "quantity": 1, "merchandiseTotal": 5.0, "taxFlag": "N"},
+        ],
+    }
+    assert [i["tax_flag"] for i in parse_online_order(order)["items"]] == ["Y", "N"]

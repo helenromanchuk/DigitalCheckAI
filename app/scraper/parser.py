@@ -161,9 +161,11 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
             # If target_item_num isn't given, attach the coupon to the most recent item. A bottle deposit
             # isn't one: it follows its item on the receipt, and a coupon never discounts it
             if not target_item_num:
-                products = [i for i in normalized_items if not is_crv_line(i["raw_description"])]
-                if products:
-                    target_item_num = products[-1]["item_number"]
+                product = next(
+                    (i for i in reversed(normalized_items) if not is_crv_line(i.get("raw_description"))), None
+                )
+                if product:
+                    target_item_num = product["item_number"]
             pending_discounts.append((target_item_num, discount_val, raw_item))
             continue
 
@@ -379,13 +381,14 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
                 "gross_amount": round(gross, 2),
                 "discount_amount": round(disc, 2),
                 "net_amount": net,
-                "tax_flag": "",
+                "tax_flag": str(line.get("taxFlag") or line.get("tax_flag") or ""),
             }
         )
 
     # getOrderDetails has no per-line tax flag, only the order's tax. With a single item that tax is all its own;
-    # with several it can't be told which are taxable (groceries aren't), so the tax isn't split per item
-    if len(normalized_items) == 1:
+    # with several it can't be told which are taxable (groceries aren't), so the tax isn't split per item.
+    # A flag the line does carry (e.g. in an imported file) is kept
+    if len(normalized_items) == 1 and not normalized_items[0]["tax_flag"]:
         normalized_items[0]["tax_flag"] = "Y"
 
     # getOrderDetails only returns the discount at the order level; spread it across items

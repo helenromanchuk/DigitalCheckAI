@@ -30,7 +30,8 @@ def crv_owners(items: list[dict[str, Any]]) -> dict[int, int]:
 
     The owner is the nearest earlier line with the linked item number that has no CRV yet ("wine, wine, CRV, CRV"
     gives each bottle one deposit), else the nearest earlier one, else the first later one; a CRV line whose item
-    isn't on the receipt has no owner.
+    isn't on the receipt has no owner. Lines whose amount has the CRV's sign come first, so a refunded deposit
+    goes to the returned bottle and not to the purchase.
     """
     links = {i: link for i, row in enumerate(items) if (link := _crv_link(row.get("raw_description")))}
     lines_by_item: dict[str, list[int]] = {}
@@ -44,6 +45,9 @@ def crv_owners(items: list[dict[str, Any]]) -> dict[int, int]:
         candidates = lines_by_item.get(item_number)
         if not candidates:
             continue
+        refund = float(items[index].get("net_amount") or 0.0) < 0
+        same_sign = [i for i in candidates if (float(items[i].get("net_amount") or 0.0) < 0) == refund]
+        candidates = same_sign or candidates
         earlier = candidates[: bisect_left(candidates, index)]
         free = [i for i in earlier if i not in claimed]
         owner = free[-1] if free else earlier[-1] if earlier else candidates[0]
@@ -69,11 +73,11 @@ def add_tax_and_crv(items: list[dict[str, Any]], receipt_tax: float) -> list[dic
     whose total is exact), since they can't show a total with tax.
     """
     rows = [dict(item) for item in items]
-    index_by_id = {row.get("id"): i for i, row in enumerate(rows)}
+    index_by_id = {row["id"]: i for i, row in enumerate(rows) if row.get("id") is not None}
     owners = {
         i: index_by_id[row["crv_owner_id"]]
         for i, row in enumerate(rows)
-        if row.get("crv_owner_id") in index_by_id
+        if row.get("crv_owner_id") is not None and row["crv_owner_id"] in index_by_id
     }
 
     kept = [i for i in range(len(rows)) if i not in owners]
@@ -109,6 +113,8 @@ def add_tax_and_crv(items: list[dict[str, Any]], receipt_tax: float) -> list[dic
         row["crv_amount"] = round(crv[index], 2)
         row["tax_amount"] = taxes[index]
         row["tax_crv"] = round((taxes[index] or 0.0) + crv[index], 2)
-        row["tax_unsplit"] = bool(tax) and not split and str(row.get("tax_flag") or "").upper() != "N"
+        # A line flagged "N" carries no tax unless a taxable deposit was folded into it
+        may_be_taxed = str(row.get("tax_flag") or "").upper() != "N" or taxable_base[index] != 0.0
+        row["tax_unsplit"] = bool(tax) and not split and may_be_taxed
         result.append(row)
     return result
