@@ -3,11 +3,15 @@ import re
 from typing import Any
 
 from app.config import FUEL_CATEGORY, OTHER_CATEGORY
+from app.item_number import core_item_number
+from app.money import allocate_cents
+from app.receipt_tax import is_crv_line
 
 # Names for items the parser categorizes itself. Product names are stored in English, like the names
 # Gemini decodes, so the catalog has one language whatever the UI language is
 FUEL_NAME_PREFIX = "Costco Fuel ("
 COUPON_NAME_PREFIX = "Coupon ("
+CRV_NAME = "California Redemption Value (CRV)"
 
 
 # A coupon's reference to its item on a Costco receipt: "TPD/1234567", "/1234567", "/ 1234567" or "#1234567".
@@ -76,20 +80,24 @@ def _is_discount_row(raw_item: dict[str, Any]) -> tuple[bool, str | None]:
 def spread_discount(items: list[dict[str, Any]], amount: float, base_key: str) -> float:
     """
     Spreads a receipt- or order-level discount across items with a positive base_key amount,
-    in proportion to it, and returns the amount allocated. The last item gets the remainder
-    so rounding cents aren't lost.
+    in proportion to it, and returns the amount allocated. Shares are whole cents that add up to
+    the amount (see allocate_cents). A bottle deposit isn't merchandise, so it is never discounted.
     """
-    allocatable = [i for i in items if i[base_key] > 0]
+    allocatable = [i for i in items if i[base_key] > 0 and not i.get("is_crv")]
     base = sum(i[base_key] for i in allocatable)
     if amount <= 0 or base <= 0:
         return 0.0
-    remaining = amount
-    for n, item in enumerate(allocatable, start=1):
-        share = remaining if n == len(allocatable) else round(amount * item[base_key] / base, 2)
-        remaining = round(remaining - share, 2)
+    for item, share in zip(allocatable, allocate_cents(amount, [i[base_key] for i in allocatable]), strict=True):
         item["discount_amount"] = round(item["discount_amount"] + share, 2)
         item["net_amount"] = round(item["net_amount"] - share, 2)
     return amount
+
+
+def mark_crv(item_entry: dict[str, Any]) -> None:
+    item_entry["is_crv"] = True
+    # A bottle deposit takes the category of the item it is charged for, so it needs no classifying
+    item_entry["default_category"] = OTHER_CATEGORY
+    item_entry["default_clean_name"] = CRV_NAME
 
 
 def _mark_fuel(item_entry: dict[str, Any]) -> None:
@@ -140,6 +148,11 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
         # The receipt is already in the normalized internal format
         if "gross_amount" in raw_item and "net_amount" in raw_item and "item_number" in raw_item:
             item_copy = dict(raw_item)
+            if is_crv_line(item_copy.get("raw_description")):
+                if item_copy.get("default_category"):
+                    item_copy["is_crv"] = True
+                else:
+                    mark_crv(item_copy)
             normalized_items.append(item_copy)
             continue
 
@@ -148,9 +161,12 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
 
         if is_disc:
             discount_val = abs(amount)
-            # If target_item_num isn't given, attach the coupon to the most recent item
-            if not target_item_num and normalized_items:
-                target_item_num = normalized_items[-1]["item_number"]
+            # If target_item_num isn't given, attach the coupon to the most recent item. A bottle deposit
+            # isn't one: it follows its item on the receipt, and a coupon never discounts it
+            if not target_item_num:
+                product = next((i for i in reversed(normalized_items) if not i.get("is_crv")), None)
+                if product:
+                    target_item_num = product["item_number"]
             pending_discounts.append((target_item_num, discount_val, raw_item))
             continue
 
@@ -206,6 +222,9 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
         }
         if is_explicit_fuel:
             _mark_fuel(item_entry)
+        elif is_crv_line(full_raw_desc):
+            mark_crv(item_entry)
+            non_fuel_lines += 1
         elif is_keyword_fuel:
             keyword_fuel_items.append((item_entry, amount, unit_price))
         else:
@@ -224,12 +243,14 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
     # Apply discounts to their items
     total_discounts_applied = 0.0
     for target_num, disc_val, raw_item in pending_discounts:
-        target = None
-        if target_num:
-            target = next(
-                (i for i in reversed(normalized_items) if i["item_number"] == target_num and i["gross_amount"] > 0),
-                None,
-            )
+        # Lines of the coupon's item: it applies to the latest sale; with only a return there, it is kept as a
+        # line of its own and taxed like the returned item
+        matches = (
+            [i for i in normalized_items if core_item_number(i["item_number"]) == core_item_number(target_num)]
+            if target_num
+            else []
+        )
+        target = next((i for i in reversed(matches) if i["gross_amount"] > 0), None)
         # Count every coupon as savings, including one kept as its own discount line below
         total_discounts_applied = round(total_discounts_applied + disc_val, 2)
         if target is not None:
@@ -242,6 +263,11 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
         # The DISCOUNT- prefix keeps it from colliding with a real product's catalog row: the coupon row's
         # own itemNumber may be a product number
         coupon_ref = target_num or str(raw_item.get("itemNumber") or "").strip() or "UNKNOWN"
+        # When its item is on the receipt as a return, the coupon changes that item's taxable amount and is taxed
+        # like it. Otherwise it changes no line's taxable amount, so without a flag of its own it counts as untaxed
+        # and doesn't stop the receipt's tax from being split
+        returned = matches[0] if matches else None
+        coupon_flag = str(raw_item.get("taxFlag") or (returned or {}).get("tax_flag") or "N")
         item_number = f"DISCOUNT-{coupon_ref}"
         desc = str(raw_item.get("itemDescription01") or "").strip() or f"DISCOUNT #{coupon_ref}"
         normalized_items.append(
@@ -254,7 +280,7 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
                 "gross_amount": 0.0,
                 "discount_amount": disc_val,
                 "net_amount": -disc_val,
-                "tax_flag": str(raw_item.get("taxFlag") or ""),
+                "tax_flag": coupon_flag,
                 "is_weight": False,
                 "default_category": OTHER_CATEGORY,
                 "default_clean_name": f"{COUPON_NAME_PREFIX}{desc})",
@@ -363,9 +389,21 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
                 "gross_amount": round(gross, 2),
                 "discount_amount": round(disc, 2),
                 "net_amount": net,
-                "tax_flag": "Y",
+                "tax_flag": str(line.get("taxFlag") or line.get("tax_flag") or ""),
             }
         )
+        if is_crv_line(desc):
+            # As on warehouse receipts: the deposit takes its bottle's category and isn't sent to Gemini
+            mark_crv(normalized_items[-1])
+
+    # getOrderDetails has no per-line tax flag, only the order's tax. With a single item that tax is all its own;
+    # with several it can't be told which are taxable (groceries aren't), so the tax isn't split per item.
+    # Fees and shipping aren't items, so when the order has them its tax may be theirs. A flag the line does
+    # carry (e.g. in an imported file) is kept
+    shipping = _to_float(raw_order.get("shippingAndHandling") or raw_order.get("shippingTotal"), 0.0)
+    has_charges = bool(fees) or bool(shipping)
+    if len(normalized_items) == 1 and not normalized_items[0]["tax_flag"] and not has_charges:
+        normalized_items[0]["tax_flag"] = "Y"
 
     # getOrderDetails only returns the discount at the order level; spread it across items
     # in proportion to their amounts so category stats reflect what was actually paid
@@ -377,7 +415,6 @@ def parse_online_order(raw_order: dict[str, Any]) -> dict[str, Any] | None:
 
     subtotal = _to_float(raw_order.get("merchandiseTotal") or raw_order.get("subTotal") or raw_order.get("subtotal"), 0.0)
     tax = _to_float(raw_order.get("orderTax") or raw_order.get("totalTax") or raw_order.get("tax"), 0.0)
-    shipping = _to_float(raw_order.get("shippingAndHandling") or raw_order.get("shippingTotal"), 0.0)
     total = _to_float(raw_order.get("orderTotal") or raw_order.get("total"), 0.0)
 
     items_net_sum = round(sum(i["net_amount"] for i in normalized_items), 2)

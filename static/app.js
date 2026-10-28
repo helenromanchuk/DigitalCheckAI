@@ -41,13 +41,13 @@ function formatUnitPrice(val) {
 
 // The API returns errors as {code, params, cause?, message}; show them in the UI language.
 // An unknown code falls back to the API's English message
-function apiErrorText(detail, fallbackKey) {
-  if (!detail || Array.isArray(detail)) return t(fallbackKey);
+function apiErrorText(detail, fallbackKey, fallbackParams = {}) {
+  if (!detail || Array.isArray(detail)) return t(fallbackKey, fallbackParams);
   if (typeof detail === "string") return detail;
   const params = { ...(detail.params || {}) };
-  if (detail.cause) params.reason = apiErrorText(detail.cause, fallbackKey);
+  if (detail.cause) params.reason = apiErrorText(detail.cause, fallbackKey, fallbackParams);
   const key = `error.${detail.code}`;
-  return key in I18N[currentLang] ? t(key, params) : detail.message || t(fallbackKey);
+  return key in I18N[currentLang] ? t(key, params) : detail.message || t(fallbackKey, fallbackParams);
 }
 
 function showBanner(message, type = "info") {
@@ -239,16 +239,25 @@ function renderPurchaseSearch(data, query) {
     return;
   }
 
-  const totalGross = rows.reduce((sum, r) => sum + r.gross_amount, 0);
-  const totalNet = rows.reduce((sum, r) => sum + r.net_amount, 0);
+  // Purchases and their totals are products; deposits (rows of their own, or folded into a bottle's row)
+  // are summed apart, as the Items tab shows them under Tax/CRV rather than Net
+  const products = rows.filter(r => !r.is_deposit);
+  const totalGross = products.reduce((sum, r) => sum + r.gross_amount, 0);
+  const totalNet = products.reduce((sum, r) => sum + r.net_amount, 0);
+  const productIds = new Set(products.map(r => r.id));
+  const totalCrv = rows.reduce((sum, r) => {
+    if (!r.is_deposit) return sum + (r.crv_amount || 0);
+    // The owner's CRV already includes this deposit when both rows match the search.
+    return sum + (r.crv_owner_id != null && productIds.has(r.crv_owner_id) ? 0 : r.net_amount);
+  }, 0);
   const stores = [...new Set(rows.map(r => STORE_LABELS[r.store] || r.store))].join(", ");
   summary.textContent = t("search.summary", {
-    count: rows.length,
+    count: products.length,
     limited: rows.length >= 500 ? t("search.limited") : "",
     stores,
     gross: formatMoney(totalGross),
     net: formatMoney(totalNet)
-  });
+  }) + (totalCrv ? ` • ${t("search.crvTotal", { amount: formatMoney(totalCrv) })}` : "");
 
   tbody.innerHTML = rows.map(r => {
     const hasDiscount = r.discount_amount > 0;
@@ -271,8 +280,8 @@ function renderPurchaseSearch(data, query) {
           </div>
         </td>
         <td class="px-3 py-2 text-right text-slate-600">${r.quantity}</td>
-        <td class="px-3 py-2 text-right text-slate-500">${hasDiscount ? `<s>${formatMoney(r.gross_amount)}</s>` : formatMoney(r.gross_amount)}</td>
-        <td class="px-3 py-2 text-right font-bold ${hasDiscount ? "text-emerald-700" : "text-slate-900"}">${formatMoney(r.net_amount)}${unitNet}</td>
+        <td class="px-3 py-2 text-right text-slate-500">${r.is_deposit ? "—" : hasDiscount ? `<s>${formatMoney(r.gross_amount)}</s>` : formatMoney(r.gross_amount)}</td>
+        <td class="px-3 py-2 text-right font-bold ${hasDiscount ? "text-emerald-700" : "text-slate-900"}">${r.is_deposit ? `—<div class="text-[10px] font-normal text-slate-400">${escapeHtml(t("receipts.itemCrv", { amount: formatMoney(r.net_amount) }))}</div>` : formatMoney(r.net_amount) + unitNet}${!r.is_deposit && r.crv_amount ? `<div class="text-[10px] font-normal text-slate-400">${escapeHtml(t("receipts.itemCrv", { amount: formatMoney(r.crv_amount) }))}</div>` : ""}</td>
         <td class="px-3 py-2 text-right text-slate-700">${formatUnitPrice(r.price_per_lb)}</td>
         <td class="px-3 py-2 text-right text-slate-700">${formatUnitPrice(r.price_per_oz)}</td>
       </tr>`;
@@ -601,7 +610,7 @@ function renderItemsTable(data) {
   tbody.innerHTML = "";
 
   if (!items.length) {
-    tbody.innerHTML = `<tr><td colspan="12" class="py-8 text-center text-slate-400">${escapeHtml(t("items.notFound"))}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="14" class="py-8 text-center text-slate-400">${escapeHtml(t("items.notFound"))}</td></tr>`;
     return;
   }
 
@@ -636,9 +645,11 @@ function renderItemsTable(data) {
           class="w-full resize-none overflow-hidden bg-transparent border border-transparent hover:border-slate-300 focus:border-blue-500 focus:bg-white rounded px-1.5 py-0.5 text-slate-900 font-medium leading-snug focus:outline-none">${escapeHtml(item.clean_name)}</textarea>
       </td>
       <td class="px-3 py-2.5 text-right text-slate-600">${item.total_quantity}</td>
-      <td class="px-3 py-2.5 text-right text-slate-500">${item.discount_saved > 0 ? `<s>${formatMoney(item.gross_spent)}</s>` : formatMoney(item.gross_spent)}</td>
-      <td class="px-3 py-2.5 text-right text-emerald-600">${item.discount_saved > 0 ? "-" + formatMoney(item.discount_saved) : "—"}</td>
-      <td class="px-3 py-2.5 text-right font-bold text-slate-900">${formatMoney(item.net_spent)}</td>
+      <td class="px-3 py-2.5 text-right text-slate-500">${item.is_deposit ? "—" : item.discount_saved > 0 ? `<s>${formatMoney(item.gross_spent)}</s>` : formatMoney(item.gross_spent)}</td>
+      <td class="px-3 py-2.5 text-right text-emerald-600">${!item.is_deposit && item.discount_saved > 0 ? "-" + formatMoney(item.discount_saved) : "—"}</td>
+      <td class="px-3 py-2.5 text-right font-bold text-slate-900">${item.is_deposit ? "—" : formatMoney(item.net_spent)}</td>
+      ${taxCrvCell(item, "px-3 py-2.5")}
+      <td class="px-3 py-2.5 text-right font-bold text-slate-900" title="${escapeHtml(item.tax_unknown ? t("total.taxNotSplit") : item.tax_partial ? t("total.taxPartial") : "")}">${item.tax_unknown ? "—" : formatMoney(item.net_spent + item.tax_crv) + (item.tax_partial ? "*" : "")}</td>
       <td class="px-3 py-2.5 text-right text-slate-700">${formatUnitPrice(item.price_per_lb)}</td>
       <td class="px-3 py-2.5 text-right text-slate-700">${formatUnitPrice(item.price_per_oz)}</td>
       <td class="px-3 py-2.5">
@@ -678,7 +689,10 @@ async function updateItemCategory(itemNumber, category, newCleanName) {
     const body = await res.json().catch(() => ({}));
     const detail = body.detail;
     const hasCode = detail && typeof detail === "object" && !Array.isArray(detail) && detail.code;
-    showBanner(hasCode ? apiErrorText(detail, "banner.itemFailed") : t("banner.itemFailed", { item: itemNumber }), "error");
+    showBanner(
+      hasCode ? apiErrorText(detail, "banner.itemFailed", { item: itemNumber }) : t("banner.itemFailed", { item: itemNumber }),
+      "error"
+    );
   }
 }
 
@@ -687,6 +701,24 @@ async function loadReceiptsList() {
   const res = await fetch(`/api/receipts?${params.toString()}`);
   lastReceipts = await res.json();
   renderReceiptsList(lastReceipts);
+}
+
+// The Tax/CRV cell of a receipt line or an item row; padding differs between the two tables
+function taxCrvCell(item, padding) {
+  const value = item.tax_amount != null || item.crv_amount ? formatMoney(item.tax_crv) : "—";
+  // In the Items tab, some purchases' tax couldn't be split: the value leaves it out, as Total does
+  const mark = item.tax_partial && !item.tax_unknown && value !== "—" ? "*" : "";
+  return `<td class="${padding} text-right text-slate-500" title="${escapeHtml(taxCrvTitle(item))}">${value}${mark}</td>`;
+}
+
+function taxCrvTitle(item) {
+  const parts = [];
+  if (item.tax_amount) parts.push(t("receipts.itemTax", { amount: formatMoney(item.tax_amount) }));
+  if (item.crv_amount) parts.push(t("receipts.itemCrv", { amount: formatMoney(item.crv_amount) }));
+  const title = parts.join(" + ");
+  if (item.tax_unknown || item.tax_unsplit) return [title, t("total.taxNotSplit")].filter(Boolean).join(". ");
+  if (item.tax_partial) return [title, t("total.taxPartial")].filter(Boolean).join(". ");
+  return title;
 }
 
 function renderReceiptsList(data) {
@@ -718,9 +750,11 @@ function renderReceiptsList(data) {
         </td>
         <td class="py-1.5 px-2"><span class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[11px]">${escapeHtml(categoryLabel(item.category))}</span></td>
         <td class="py-1.5 px-2 text-right text-slate-500">${item.quantity}</td>
-        <td class="py-1.5 px-2 text-right text-slate-500">${item.discount_amount > 0 ? `<s>${formatMoney(item.gross_amount)}</s>` : formatMoney(item.gross_amount)}</td>
-        <td class="py-1.5 px-2 text-right text-emerald-600">${item.discount_amount > 0 ? "-" + formatMoney(item.discount_amount) : "—"}</td>
-        <td class="py-1.5 px-2 text-right font-semibold text-slate-900">${formatMoney(item.net_amount)}</td>
+        <td class="py-1.5 px-2 text-right text-slate-500">${item.is_deposit ? "—" : item.discount_amount > 0 ? `<s>${formatMoney(item.gross_amount)}</s>` : formatMoney(item.gross_amount)}</td>
+        <td class="py-1.5 px-2 text-right text-emerald-600">${!item.is_deposit && item.discount_amount > 0 ? "-" + formatMoney(item.discount_amount) : "—"}</td>
+        <td class="py-1.5 px-2 text-right font-semibold text-slate-900">${item.is_deposit ? "—" : formatMoney(item.net_amount)}</td>
+        ${taxCrvCell(item, "py-1.5 px-2")}
+        <td class="py-1.5 px-2 text-right font-semibold text-slate-900" title="${item.tax_unsplit ? escapeHtml(t("total.taxNotSplit")) : ""}">${item.tax_unsplit ? "—" : formatMoney((item.is_deposit ? 0 : item.net_amount) + item.tax_crv)}</td>
         <td class="py-1.5 px-2 text-right text-slate-600">${formatUnitPrice(item.price_per_lb)}</td>
         <td class="py-1.5 px-2 text-right text-slate-600">${formatUnitPrice(item.price_per_oz)}</td>
       </tr>
@@ -754,6 +788,8 @@ function renderReceiptsList(data) {
               <th class="text-right py-1 px-2">${escapeHtml(t("col.gross"))}</th>
               <th class="text-right py-1 px-2">${escapeHtml(t("col.discount"))}</th>
               <th class="text-right py-1 px-2">${escapeHtml(t("col.netAmount"))}</th>
+              <th class="text-right py-1 px-2" title="${escapeHtml(t("col.taxCrvTitle"))}">${escapeHtml(t("col.taxCrv"))}</th>
+              <th class="text-right py-1 px-2" title="${escapeHtml(t("col.totalTitle"))}">${escapeHtml(t("col.total"))}</th>
               <th class="text-right py-1 px-2">$/lb</th>
               <th class="text-right py-1 px-2">$/oz</th>
             </tr>

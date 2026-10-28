@@ -2,7 +2,7 @@
 from pathlib import Path
 
 from app.categorizer.gemini_classifier import GeminiItemClassifier
-from app.database import ENGLISH_NAMES_SCHEMA_VERSION, Database
+from app.database import CRV_SCHEMA_VERSION, Database
 from app.scraper.parser import parse_any_costco_payload
 
 
@@ -320,7 +320,7 @@ def test_migration_unlocks_groceries_an_old_parser_took_for_fuel(tmp_path: Path)
     assert receipt_type == "warehouse"
     assert {(r["category"], r["classified_by"]) for r in rows} == {("Other", "pending")}
     assert {i["item_number"] for i in db.get_pending_items_for_gemini()} == {"1000001", "1000002"}
-    assert version == ENGLISH_NAMES_SCHEMA_VERSION
+    assert version == CRV_SCHEMA_VERSION
 
 
 def test_unmatched_coupon_does_not_overwrite_product_with_same_number(tmp_path: Path):

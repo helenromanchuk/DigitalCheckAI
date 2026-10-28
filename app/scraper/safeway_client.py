@@ -13,8 +13,9 @@ from typing import Any
 
 from app.config import BROWSER_PROFILE_DIR, FUEL_CATEGORY
 from app.errors import AppError
+from app.receipt_tax import is_crv_line
 from app.scraper.costco_client import _sync_lock
-from app.scraper.parser import spread_discount
+from app.scraper.parser import mark_crv, spread_discount
 
 logger = logging.getLogger(__name__)
 
@@ -109,12 +110,17 @@ def parse_safeway_receipt(raw: dict[str, Any]) -> dict[str, Any] | None:
             "gross_amount": gross,
             "discount_amount": discount,
             "net_amount": net,
+            # The receipts API has no per-line taxable flag (only the receipt's taxAmount), so the receipt's tax
+            # can't be split across its items (see app.receipt_tax)
             "tax_flag": "",
             # For sold-by-weight items, quantity is the weight in pounds
             "is_weight": bool(line.get("weightItem")) and not line.get("isFuel"),
         }
         if line.get("isFuel"):
             item["default_category"] = FUEL_CATEGORY
+        elif is_crv_line(name):
+            # Deposits are tagged the same way for every store: no discount share, no classifying
+            mark_crv(item)
         bpn = str(line.get("bpn") or "").strip()
         if bpn:
             item["image_url"] = SAFEWAY_IMAGE_URL.format(bpn=bpn)

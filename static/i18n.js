@@ -20,6 +20,7 @@ const I18N = {
     "search.minChars": "Введите хотя бы 2 символа.",
     "search.notFound": "Ничего не найдено по запросу «{query}».",
     "search.summary": "Найдено покупок: {count}{limited} • Магазины: {stores} • До скидки: {gross} • Со скидкой: {net}",
+    "search.crvTotal": "Залог CRV: {amount}",
     "search.limited": " (показаны первые 500)",
     "search.perUnit": "{amount} за ед.",
 
@@ -42,6 +43,13 @@ const I18N = {
     "col.decodedShort": "Расшифровка",
     "col.discount": "Скидка",
     "col.netAmount": "Чистая сумма",
+    "col.netItemsTitle": "Без налога и залога CRV: они в столбцах «Налог/CRV» и «Итого». В статистике по категориям залог входит в сумму категории товара",
+    "col.taxCrvTitle": "Налог чека, разнесённый по облагаемым товарам, плюс залог за тару (CRV)",
+    "col.taxCrv": "Налог/CRV",
+    "col.total": "Итого",
+    "col.totalTitle": "Чистая сумма плюс налог и CRV",
+    "total.taxNotSplit": "Налог этого чека не удалось разнести по товарам",
+    "total.taxPartial": "Без налога части покупок: в их чеках налог нельзя разнести по товарам",
     "col.categoryEditable": "Категория (можно изменить)",
     "col.source": "Источник",
 
@@ -136,6 +144,8 @@ const I18N = {
     "receipts.notFound": "Чеки за выбранный период не найдены.",
     "receipts.discount": "Скидка: -{amount}",
     "receipts.tax": "Налог: {amount}",
+    "receipts.itemTax": "налог {amount}",
+    "receipts.itemCrv": "залог CRV {amount}",
 
     "banner.itemSaved": "Категория для Item #{item} сохранена в локальной базе и пересчитана во всех чеках.",
     "banner.itemFailed": "Не удалось обновить Item #{item}",
@@ -226,6 +236,7 @@ const I18N = {
     "search.minChars": "Type at least 2 characters.",
     "search.notFound": "Nothing found for “{query}”.",
     "search.summary": "Purchases found: {count}{limited} • Stores: {stores} • Before discounts: {gross} • After discounts: {net}",
+    "search.crvTotal": "CRV deposits: {amount}",
     "search.limited": " (showing the first 500)",
     "search.perUnit": "{amount} each",
 
@@ -248,6 +259,13 @@ const I18N = {
     "col.decodedShort": "Decoded name",
     "col.discount": "Discount",
     "col.netAmount": "Net amount",
+    "col.netItemsTitle": "Excludes tax and the CRV deposit, which are in Tax/CRV and Total. Category stats count the deposit in its item's category",
+    "col.taxCrvTitle": "Receipt tax split across taxable items, plus the container deposit (CRV)",
+    "col.taxCrv": "Tax/CRV",
+    "col.total": "Total",
+    "col.totalTitle": "Net amount plus tax and CRV",
+    "total.taxNotSplit": "This receipt's tax couldn't be split across its items",
+    "total.taxPartial": "Leaves out tax on some purchases: their receipts' tax can't be split across items",
     "col.categoryEditable": "Category (editable)",
     "col.source": "Source",
 
@@ -342,6 +360,8 @@ const I18N = {
     "receipts.notFound": "No receipts for the selected period.",
     "receipts.discount": "Discount: -{amount}",
     "receipts.tax": "Tax: {amount}",
+    "receipts.itemTax": "tax {amount}",
+    "receipts.itemCrv": "CRV {amount}",
 
     "banner.itemSaved": "Category for Item #{item} saved to the local database and updated on all receipts.",
     "banner.itemFailed": "Couldn't update Item #{item}",
