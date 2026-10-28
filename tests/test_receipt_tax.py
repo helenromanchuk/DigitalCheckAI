@@ -1,6 +1,5 @@
 """Tests for per-item tax and CRV on a receipt."""
-from app.receipt_tax import add_tax_and_crv as _add_tax_and_crv
-from app.receipt_tax import crv_owners
+from app.receipt_tax import crv_owners, is_crv_line, split_receipt
 
 
 def _item(item_number, description, net, flag=""):
@@ -8,11 +7,13 @@ def _item(item_number, description, net, flag=""):
 
 
 def add_tax_and_crv(items, receipt_tax):
-    """Links CRV lines as the database does on insert, then splits the tax."""
-    items = [dict(item, id=index + 1, crv_owner_id=None) for index, item in enumerate(items)]
-    for crv_index, owner_index in crv_owners(items).items():
-        items[crv_index]["crv_owner_id"] = items[owner_index]["id"]
-    return _add_tax_and_crv(items, receipt_tax)
+    """The lines a receipt view shows (CRV lines folded into their items), with their stored split."""
+    rows = []
+    for item, split in zip(items, split_receipt(items, receipt_tax), strict=True):
+        if split["crv_owner"] is None:
+            tax_crv = round((split["tax_amount"] or 0.0) + split["crv_amount"], 2)
+            rows.append(dict(item, **split, tax_crv=tax_crv))
+    return rows
 
 
 def test_crv_line_with_a_second_description_is_still_linked():
@@ -313,8 +314,8 @@ def test_refunded_deposit_goes_to_the_returned_bottle():
     assert crv_owners(items) == {2: 0, 3: 1}
 
 
-def test_lines_without_ids_are_not_taken_for_crv():
-    rows = _add_tax_and_crv([_item("1", "SOAP", 6.0, "Y"), _item("2", "TOWEL", 4.0, "Y")], 1.0)
+def test_ordinary_lines_are_never_folded_as_crv():
+    rows = add_tax_and_crv([_item("1", "SOAP", 6.0, "Y"), _item("2", "TOWEL", 4.0, "Y")], 1.0)
     assert [r["item_number"] for r in rows] == ["1", "2"]
 
 
@@ -396,3 +397,68 @@ def test_single_item_online_order_with_a_fee_is_not_taxed_per_item():
     }
     (milk,) = parse_online_order(order)["items"]
     assert milk["tax_flag"] == ""
+
+
+def test_tax_is_not_split_when_a_line_has_an_unknown_flag():
+    items = [_item("1", "SOAP", 10.0, "Y"), _item("2", "MYSTERY", 10.0, "")]
+    soap, mystery = add_tax_and_crv(items, 1.0)
+    assert soap["tax_amount"] is None and mystery["tax_amount"] is None
+    assert soap["tax_unsplit"] and mystery["tax_unsplit"]
+
+
+def test_crv_wordings_are_recognized():
+    for description in (
+        "CA REDEMP VAL T EI/919140",
+        "CA REDEMP VAL TEI/919140",
+        "CA REDEMP VA T EI/919140",
+        "CA REDEMP VAL /919140",
+        "CA REDEMP VAL T",
+    ):
+        assert is_crv_line(description), description
+    assert not is_crv_line("CAB SAUV NAPA 750ML")
+    items = [_item("919140", "MILESTONE", 4.99, "Y"), _item("1254", "CA REDEMP VAL TEI/919140", 0.10)]
+    assert crv_owners(items) == {1: 0}
+
+
+def test_deposit_without_a_marker_leaves_the_tax_unsplit():
+    items = [_item("919140", "MILESTONE", 4.99, "Y"), _item("1254", "CA REDEMP VAL /919140", 0.10)]
+    (wine,) = add_tax_and_crv(items, 0.51)
+    assert wine["crv_amount"] == 0.10
+    assert wine["tax_amount"] is None and wine["tax_unsplit"] is True
+
+
+def test_old_database_drops_crv_for_item_and_gets_the_split_stored(tmp_path):
+    import sqlite3
+
+    from app.database import CRV_SCHEMA_VERSION, Database
+    from app.scraper.parser import parse_any_costco_payload
+
+    path = tmp_path / "old.db"
+    db = Database(path)
+    db.init_db()
+    receipt = {
+        "transactionBarcode": "21126701000062606120935",
+        "transactionDate": "2026-06-12",
+        "receiptType": "In-Warehouse",
+        "taxes": 0.51,
+        "itemArray": [
+            {"itemNumber": "919140", "itemDescription01": "MILESTONE", "unit": 1, "amount": 4.99, "taxFlag": "Y"},
+            {"itemNumber": "1254", "itemDescription01": "CA REDEMP VAL T EI/919140", "unit": 1, "amount": 0.1},
+        ],
+    }
+    db.upsert_receipts(parse_any_costco_payload([receipt]))
+    # The previous layout: crv_for_item, and no stored split
+    with sqlite3.connect(path) as conn:
+        conn.execute("ALTER TABLE receipt_items ADD COLUMN crv_for_item TEXT")
+        for column in ("tax_amount", "crv_amount", "tax_unsplit"):
+            conn.execute(f"ALTER TABLE receipt_items DROP COLUMN {column}")
+        conn.execute("UPDATE receipt_items SET crv_owner_id = NULL")
+        conn.execute(f"PRAGMA user_version = {CRV_SCHEMA_VERSION}")
+
+    db.init_db()
+    with sqlite3.connect(path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(receipt_items)")}
+    assert "crv_for_item" not in columns
+    (wine,) = db.get_receipts_list()[0]["items"]
+    assert (wine["tax_amount"], wine["crv_amount"], wine["tax_crv"]) == (0.51, 0.10, 0.61)
+    assert db.get_statistics()["by_category"][0]["net_spent"] == 5.09

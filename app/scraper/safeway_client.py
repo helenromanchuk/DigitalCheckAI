@@ -109,6 +109,8 @@ def parse_safeway_receipt(raw: dict[str, Any]) -> dict[str, Any] | None:
             "gross_amount": gross,
             "discount_amount": discount,
             "net_amount": net,
+            # The receipts API has no per-line taxable flag (only the receipt's taxAmount), so the receipt's tax
+            # can't be split across its items (see app.receipt_tax)
             "tax_flag": "",
             # For sold-by-weight items, quantity is the weight in pounds
             "is_weight": bool(line.get("weightItem")) and not line.get("isFuel"),

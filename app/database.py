@@ -19,7 +19,7 @@ from app.config import (
     merge_category_labels_ru,
 )
 from app.errors import AppError
-from app.receipt_tax import add_tax_and_crv, crv_owners, empty_tax_crv
+from app.receipt_tax import split_receipt
 from app.unit_price import add_unit_prices
 
 # PRAGMA user_version after each one-time data migration (see init_db)
@@ -146,13 +146,18 @@ class Database:
             item_columns = {row["name"] for row in conn.execute("PRAGMA table_info(receipt_items)")}
             if "is_weight" not in item_columns:
                 conn.execute("ALTER TABLE receipt_items ADD COLUMN is_weight INTEGER NOT NULL DEFAULT 0")
-            # Migration: a CRV line ("CA REDEMP VAL T EI/919140") counts towards the item it was charged for
-            # (crv_for_item is the owner's item number for SQL joins, crv_owner_id the owner's receipt_items id)
-            if "crv_for_item" not in item_columns:
-                conn.execute("ALTER TABLE receipt_items ADD COLUMN crv_for_item TEXT")
+            # Migration: each line's tax share and CRV (see app.receipt_tax), stored when its receipt is saved.
+            # crv_owner_id is the receipt_items id a CRV line ("CA REDEMP VAL T EI/919140") is folded into;
+            # tax_unsplit is NULL until the line's receipt has been split (see _split_stored_receipts)
             if "crv_owner_id" not in item_columns:
                 conn.execute("ALTER TABLE receipt_items ADD COLUMN crv_owner_id INTEGER")
-                self._link_crv_lines(conn)
+            if "tax_unsplit" not in item_columns:
+                conn.execute("ALTER TABLE receipt_items ADD COLUMN tax_amount REAL")
+                conn.execute("ALTER TABLE receipt_items ADD COLUMN crv_amount REAL NOT NULL DEFAULT 0.0")
+                conn.execute("ALTER TABLE receipt_items ADD COLUMN tax_unsplit INTEGER")
+            if "crv_for_item" in item_columns:
+                # An earlier version also stored the owner's item number, which crv_owner_id already gives
+                conn.execute("ALTER TABLE receipt_items DROP COLUMN crv_for_item")
             self._merge_categories_clashing_with_defaults(conn)
             schema_version = conn.execute("PRAGMA user_version").fetchone()[0]
 
@@ -178,24 +183,42 @@ class Database:
             with self.connect() as conn:
                 conn.execute(f"PRAGMA user_version = {CRV_SCHEMA_VERSION}")
 
+        # Receipts saved before the tax split was stored, and not re-parsed above, get it now. Re-parsed
+        # receipts already have it, so each receipt is split once
+        with self.connect() as conn:
+            self._split_stored_receipts(conn)
+
     @classmethod
-    def _link_crv_lines(cls, conn: sqlite3.Connection) -> None:
-        """Links the CRV lines of every stored receipt to the lines they belong to (a one-time migration)."""
+    def _split_stored_receipts(cls, conn: sqlite3.Connection) -> None:
+        """Stores the tax split of every receipt that has lines without one."""
         rows = conn.execute(
-            "SELECT id, transaction_barcode, item_number, raw_description, net_amount FROM receipt_items "
-            "ORDER BY transaction_barcode, id"
+            """
+            SELECT ri.id, ri.transaction_barcode, ri.item_number, ri.raw_description, ri.net_amount,
+                   ri.tax_flag, r.tax
+            FROM receipt_items ri
+            JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
+            WHERE ri.transaction_barcode IN (SELECT transaction_barcode FROM receipt_items WHERE tax_unsplit IS NULL)
+            ORDER BY ri.transaction_barcode, ri.id
+            """
         ).fetchall()
         for _, group in groupby(rows, key=lambda row: row["transaction_barcode"]):
-            cls._save_crv_links(conn, [dict(row) for row in group])
+            lines = [dict(row) for row in group]
+            cls._save_split(conn, lines, lines[0]["tax"])
 
     @staticmethod
-    def _save_crv_links(conn: sqlite3.Connection, lines: list[dict[str, Any]]) -> None:
-        """Stores the owner of each CRV line among one receipt's lines (each with its receipt_items id)."""
+    def _save_split(conn: sqlite3.Connection, lines: list[dict[str, Any]], receipt_tax: float) -> None:
+        """Stores one receipt's CRV owners and tax split; lines are in receipt order, each with its id."""
         conn.executemany(
-            "UPDATE receipt_items SET crv_for_item = ?, crv_owner_id = ? WHERE id = ?",
+            "UPDATE receipt_items SET crv_owner_id = ?, tax_amount = ?, crv_amount = ?, tax_unsplit = ? WHERE id = ?",
             [
-                (lines[owner]["item_number"], lines[owner]["id"], lines[crv]["id"])
-                for crv, owner in crv_owners(lines).items()
+                (
+                    lines[split["crv_owner"]]["id"] if split["crv_owner"] is not None else None,
+                    split["tax_amount"],
+                    split["crv_amount"],
+                    1 if split["tax_unsplit"] else 0,
+                    line["id"],
+                )
+                for line, split in zip(lines, split_receipt(lines, receipt_tax), strict=True)
             ],
         )
 
@@ -713,9 +736,10 @@ class Database:
                             "item_number": item_num,
                             "raw_description": raw_desc,
                             "net_amount": float(line.get("net_amount", 0.0)),
+                            "tax_flag": str(line.get("tax_flag", "")),
                         }
                     )
-                self._save_crv_links(conn, inserted_lines)
+                self._save_split(conn, inserted_lines, float(receipt.get("tax", 0.0)))
 
         return {
             "inserted_receipts": inserted_receipts,
@@ -774,18 +798,22 @@ class Database:
                 params,
             ).fetchone()
 
+            # A CRV line counts towards the category of the item it was charged for: the deposit is part of
+            # what was spent on it. The Items tab shows the same deposit under Tax/CRV and Total instead of
+            # Net, so a category's net here is its items' net plus their deposits
             cat_rows = conn.execute(
                 f"""
                 SELECT
                     c.category AS category,
-                    COUNT(CASE WHEN ri.crv_for_item IS NULL THEN ri.id END) AS line_count,
-                    COUNT(DISTINCT COALESCE(ri.crv_for_item, ri.item_number)) AS unique_items,
+                    COUNT(CASE WHEN ri.crv_owner_id IS NULL THEN ri.id END) AS line_count,
+                    COUNT(DISTINCT COALESCE(owner.item_number, ri.item_number)) AS unique_items,
                     ROUND(COALESCE(SUM(ri.gross_amount), 0.0), 2) AS gross_spent,
                     ROUND(COALESCE(SUM(ri.discount_amount), 0.0), 2) AS discount_saved,
                     ROUND(COALESCE(SUM(ri.net_amount), 0.0), 2) AS net_spent
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
-                JOIN item_catalog c ON c.item_number = COALESCE(ri.crv_for_item, ri.item_number)
+                LEFT JOIN receipt_items owner ON owner.id = ri.crv_owner_id
+                JOIN item_catalog c ON c.item_number = COALESCE(owner.item_number, ri.item_number)
                 WHERE {where_sql}
                 GROUP BY c.category
                 ORDER BY net_spent DESC
@@ -801,7 +829,8 @@ class Database:
                     ROUND(COALESCE(SUM(ri.net_amount), 0.0), 2) AS net_spent
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
-                JOIN item_catalog c ON c.item_number = COALESCE(ri.crv_for_item, ri.item_number)
+                LEFT JOIN receipt_items owner ON owner.id = ri.crv_owner_id
+                JOIN item_catalog c ON c.item_number = COALESCE(owner.item_number, ri.item_number)
                 WHERE {where_sql}
                 GROUP BY year_month, c.category
                 ORDER BY year_month ASC, net_spent DESC
@@ -871,8 +900,9 @@ class Database:
     ) -> list[dict[str, Any]]:
         """Returns an aggregated list of items for the period with their categories and totals."""
         where_sql, params = self._build_receipt_filter(start_date, end_date, receipt_type, store)
-        # A CRV line is a deposit for another item, not a product of its own
-        where_sql += " AND ri.crv_for_item IS NULL "
+        # A CRV line is a deposit for another item, not a product of its own: it shows in its item's Tax/CRV
+        # and Total (crv_amount), not in Net, while the category stats count it in the item's category
+        where_sql += " AND ri.crv_owner_id IS NULL "
         if category and category != "all":
             where_sql += " AND c.category = ? "
             params.append(category)
@@ -902,6 +932,10 @@ class Database:
                     ROUND(COALESCE(SUM(ri.gross_amount), 0.0), 2) AS gross_spent,
                     ROUND(COALESCE(SUM(ri.discount_amount), 0.0), 2) AS discount_saved,
                     ROUND(COALESCE(SUM(ri.net_amount), 0.0), 2) AS net_spent,
+                    ROUND(SUM(ri.tax_amount), 2) AS tax_amount,
+                    ROUND(COALESCE(SUM(ri.crv_amount), 0.0), 2) AS crv_amount,
+                    ROUND(COALESCE(SUM(ri.tax_amount), 0.0) + COALESCE(SUM(ri.crv_amount), 0.0), 2) AS tax_crv,
+                    MAX(COALESCE(ri.tax_unsplit, 0)) AS tax_partial,
                     MAX(substr(r.transaction_date, 1, 10)) AS last_purchased
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
@@ -912,50 +946,13 @@ class Database:
                 """,
                 params,
             ).fetchall()
-            tax_crv = self._tax_crv_by_item(conn, where_sql, params)
         result = []
         for r in rows:
             item = add_unit_prices(dict(r), "net_spent", "total_quantity")
-            item.update(tax_crv.get(item["item_number"]) or empty_tax_crv())
+            # Some purchase's tax couldn't be split, so the item's total with tax is incomplete
+            item["tax_partial"] = bool(item["tax_partial"])
             result.append(item)
         return result
-
-    @staticmethod
-    def _tax_crv_by_item(conn: sqlite3.Connection, where_sql: str, params: list[Any]) -> dict[str, dict[str, Any]]:
-        """Sums each item's share of receipt tax and its CRV over the receipts with lines matching the item filter.
-
-        The tax is split per receipt (see add_tax_and_crv), so every line of those receipts is read,
-        not only the lines of the items being listed.
-        """
-        rows = conn.execute(
-            f"""
-            SELECT r.transaction_barcode, r.tax, ri.id, ri.item_number, ri.raw_description, ri.net_amount,
-                   ri.tax_flag, ri.crv_owner_id
-            FROM receipt_items ri
-            JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
-            WHERE r.transaction_barcode IN (
-                SELECT ri.transaction_barcode
-                FROM receipt_items ri
-                JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
-                JOIN item_catalog c ON c.item_number = ri.item_number
-                WHERE {where_sql}
-            )
-            ORDER BY r.transaction_barcode, ri.id
-            """,
-            params,
-        ).fetchall()
-        totals: dict[str, dict[str, Any]] = {}
-        for _, group in groupby(rows, key=lambda row: row["transaction_barcode"]):
-            lines = [dict(row) for row in group]
-            for line in add_tax_and_crv(lines, lines[0]["tax"]):
-                total = totals.setdefault(line["item_number"], empty_tax_crv())
-                if line["tax_amount"] is not None:
-                    total["tax_amount"] = round((total["tax_amount"] or 0.0) + line["tax_amount"], 2)
-                total["crv_amount"] = round(total["crv_amount"] + line["crv_amount"], 2)
-                total["tax_crv"] = round(total["tax_crv"] + line["tax_crv"], 2)
-                # Some purchase's tax couldn't be split, so the item's total with tax is incomplete
-                total["tax_partial"] = total["tax_partial"] or line["tax_unsplit"]
-        return totals
 
     def search_purchases(self, query: str, limit: int = 500) -> list[dict[str, Any]]:
         """
@@ -985,7 +982,7 @@ class Database:
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
                 JOIN item_catalog c ON c.item_number = ri.item_number
-                WHERE ri.crv_for_item IS NULL
+                WHERE ri.crv_owner_id IS NULL
                   AND (casefold(ri.item_number) LIKE ?
                    OR casefold(ri.raw_description) LIKE ?
                    OR casefold(c.clean_name) LIKE ?)
@@ -1044,17 +1041,22 @@ class Database:
                         ri.gross_amount,
                         ri.discount_amount,
                         ri.net_amount,
-                        ri.tax_flag,
-                        ri.crv_owner_id
+                        ri.tax_amount,
+                        ri.crv_amount,
+                        ROUND(COALESCE(ri.tax_amount, 0.0) + ri.crv_amount, 2) AS tax_crv,
+                        COALESCE(ri.tax_unsplit, 0) AS tax_unsplit
                     FROM receipt_items ri
                     JOIN item_catalog c ON c.item_number = ri.item_number
-                    WHERE ri.transaction_barcode = ?
+                    WHERE ri.transaction_barcode = ? AND ri.crv_owner_id IS NULL
                     ORDER BY ri.id ASC
                     """,
                     (rec["transaction_barcode"],),
                 ).fetchall()
-                items_with_tax = add_tax_and_crv([dict(i) for i in items], rec["tax"])
-                rec_dict["items"] = [add_unit_prices(i, "net_amount", "quantity") for i in items_with_tax]
+                rec_dict["items"] = []
+                for row in items:
+                    item = add_unit_prices(dict(row), "net_amount", "quantity")
+                    item["tax_unsplit"] = bool(item["tax_unsplit"])
+                    rec_dict["items"].append(item)
                 result.append(rec_dict)
             return result
 
@@ -1148,7 +1150,8 @@ class Database:
                     COALESCE(SUM(CASE WHEN r.receipt_type != 'gas' AND c.category = ? THEN ri.net_amount ELSE 0.0 END), 0.0) AS alcohol_items_net
                 FROM receipt_items ri
                 JOIN receipts r ON r.transaction_barcode = ri.transaction_barcode
-                JOIN item_catalog c ON c.item_number = COALESCE(ri.crv_for_item, ri.item_number)
+                LEFT JOIN receipt_items owner ON owner.id = ri.crv_owner_id
+                JOIN item_catalog c ON c.item_number = COALESCE(owner.item_number, ri.item_number)
                 WHERE {where_sql}
                 """,
                 [ALCOHOL_CATEGORY, *params],
