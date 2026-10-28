@@ -726,8 +726,10 @@ def test_orphan_deposit_and_items_with_no_split_tax_in_the_views(tmp_path):
     )
     soap, deposit = db.get_receipts_list()[0]["items"]
     assert deposit["is_deposit"] and deposit["crv_amount"] == 0.1
-    (listed,) = db.get_items_summary()
-    assert listed["item_number"] == "SWY-1" and listed["tax_unknown"] is True
+    listed = {i["item_number"]: i for i in db.get_items_summary()}
+    assert listed["SWY-1"]["tax_unknown"] is True
+    # The deposit whose bottle is elsewhere keeps its money in view: under Tax/CRV, not Net
+    assert (listed["1254"]["net_spent"], listed["1254"]["crv_amount"]) == (0.0, 0.1)
     assert db.search_purchases("REDEMP") == []
 
 
@@ -748,3 +750,56 @@ def test_catalog_rows_of_unparseable_receipts_get_the_crv_category(tmp_path):
 
     db.init_db()
     assert "1254" not in [i["item_number"] for i in db.get_pending_items_for_gemini()]
+
+
+def test_tax_on_a_receipt_with_only_untaxed_lines_is_flagged():
+    (row,) = add_tax_and_crv([_item("1", "KIWI", 5.0, "N")], 1.25)
+    assert row["tax_amount"] is None and row["tax_unsplit"] is True
+
+
+def test_taxable_line_that_nets_to_zero_shows_a_zero_tax():
+    # A fully discounted taxable item: taxed, at $0.00, unlike an untaxed one
+    items = [_item("1", "TV", 100.0, "Y"), _item("2", "FREE LAMP", 0.0, "Y"), _item("3", "KIWI", 5.0, "N")]
+    rows = add_tax_and_crv(items, 10.0)
+    assert [r["tax_amount"] for r in rows] == [10.0, 0.0, None]
+
+
+def test_coupon_with_leading_zeros_attaches_to_its_sale():
+    from app.scraper.parser import parse_warehouse_or_gas_receipt
+
+    parsed = parse_warehouse_or_gas_receipt(
+        {
+            "transactionBarcode": "1013",
+            "transactionDate": "2026-06-13",
+            "receiptType": "In-Warehouse",
+            "itemArray": [
+                {"itemNumber": "0919140", "itemDescription01": "MILESTONE", "unit": 1, "amount": 20.0, "taxFlag": "Y"},
+                {"itemNumber": "999", "itemDescription01": "/ 919140", "unit": 1, "amount": -4.0},
+            ],
+        }
+    )
+    (wine,) = parsed["items"]
+    assert wine["net_amount"] == 16.0
+
+
+def test_orphan_deposits_are_not_counted_as_unique_items(tmp_path):
+    from app.database import Database
+
+    db = Database(tmp_path / "unique.db")
+    db.init_db()
+    db.upsert_receipts(
+        [
+            {
+                "transaction_barcode": "1014",
+                "transaction_date": "2026-06-14",
+                "receipt_type": "warehouse",
+                "tax": 0.0,
+                "items": [
+                    {"item_number": "1254", "raw_description": "CA REDEMP VAL N EE/111", "net_amount": 0.1, "gross_amount": 0.1},
+                    {"item_number": "1254", "raw_description": "CA REDEMP VAL N EE/222", "net_amount": 0.1, "gross_amount": 0.1},
+                ],
+            }
+        ]
+    )
+    (other,) = db.get_statistics()["by_category"]
+    assert (other["line_count"], other["unique_items"]) == (0, 0)

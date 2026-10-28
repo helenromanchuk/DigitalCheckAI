@@ -176,8 +176,10 @@ class Database:
             # Migration: online orders with several items no longer mark every line taxable. The old parser's
             # all-"Y" flags are reset before any re-parse below, which gives back the flags an order really has
             # (from its raw_json); an order it can't redo keeps no flags, so its tax isn't split over groceries.
-            # An order with any other flag got it from an imported file and keeps it. Their stored split came
-            # from the old flags, so they are split again at the end
+            # An order with any other flag got it from an imported file and keeps it. An all-"Y" order whose
+            # raw_json can't be re-parsed can't be told apart from the old parser's, so it shows its tax as not
+            # split rather than risk a wrong split. Their stored split came from the old flags, so they are
+            # split again at the end
             all_taxable_online = """
                 SELECT ri.transaction_barcode
                 FROM receipt_items ri
@@ -228,7 +230,7 @@ class Database:
 
         rows = conn.execute(
             "SELECT item_number, raw_description FROM item_catalog "
-            "WHERE is_manual_override = 0 AND classified_by != 'parser' AND raw_description LIKE 'CA REDEMP%'"
+            "WHERE is_manual_override = 0 AND classified_by != 'parser' AND LTRIM(raw_description) LIKE 'CA REDEMP%'"
         ).fetchall()
         now = datetime.now(UTC).isoformat()
         conn.executemany(
@@ -875,7 +877,7 @@ class Database:
                 SELECT
                     c.category AS category,
                     COUNT(CASE WHEN ri.is_deposit = 0 THEN ri.id END) AS line_count,
-                    COUNT(DISTINCT COALESCE(owner.item_number, ri.item_number)) AS unique_items,
+                    COUNT(DISTINCT CASE WHEN ri.is_deposit = 0 THEN ri.item_number END) AS unique_items,
                     ROUND(COALESCE(SUM(ri.gross_amount), 0.0), 2) AS gross_spent,
                     ROUND(COALESCE(SUM(ri.discount_amount), 0.0), 2) AS discount_saved,
                     ROUND(COALESCE(SUM(ri.net_amount), 0.0), 2) AS net_spent
@@ -967,9 +969,10 @@ class Database:
     ) -> list[dict[str, Any]]:
         """Returns an aggregated list of items for the period with their categories and totals."""
         where_sql, params = self._build_receipt_filter(start_date, end_date, receipt_type, store)
-        # A CRV line is a deposit for another item, not a product of its own: it shows in its item's Tax/CRV
-        # and Total (crv_amount), not in Net, while the category stats count it in the item's category
-        where_sql += " AND ri.is_deposit = 0 "
+        # A CRV line is a deposit, not a product: one folded into its bottle shows in the bottle's Tax/CRV and
+        # Total (crv_amount); one whose bottle isn't on the receipt stays a row of its own with its amount under
+        # Tax/CRV, not Net, as in the receipt view. The category stats count deposits in their item's category
+        where_sql += " AND ri.crv_owner_id IS NULL "
         if category and category != "all":
             where_sql += " AND c.category = ? "
             params.append(category)
@@ -996,9 +999,10 @@ class Database:
                     MAX(ri.is_weight) AS is_weight,
                     COUNT(ri.id) AS purchase_count,
                     ROUND(COALESCE(SUM(ri.quantity), 0.0), 2) AS total_quantity,
-                    ROUND(COALESCE(SUM(ri.gross_amount), 0.0), 2) AS gross_spent,
-                    ROUND(COALESCE(SUM(ri.discount_amount), 0.0), 2) AS discount_saved,
-                    ROUND(COALESCE(SUM(ri.net_amount), 0.0), 2) AS net_spent,
+                    ROUND(COALESCE(SUM(CASE WHEN ri.is_deposit = 0 THEN ri.gross_amount END), 0.0), 2) AS gross_spent,
+                    ROUND(COALESCE(SUM(CASE WHEN ri.is_deposit = 0 THEN ri.discount_amount END), 0.0), 2)
+                        AS discount_saved,
+                    ROUND(COALESCE(SUM(CASE WHEN ri.is_deposit = 0 THEN ri.net_amount END), 0.0), 2) AS net_spent,
                     ROUND(SUM(ri.tax_amount), 2) AS tax_amount,
                     ROUND(COALESCE(SUM(ri.crv_amount), 0.0), 2) AS crv_amount,
                     ROUND(COALESCE(SUM(ri.tax_amount), 0.0) + COALESCE(SUM(ri.crv_amount), 0.0), 2) AS tax_crv,

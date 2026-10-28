@@ -149,8 +149,9 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
         if "gross_amount" in raw_item and "net_amount" in raw_item and "item_number" in raw_item:
             item_copy = dict(raw_item)
             if is_crv_line(item_copy.get("raw_description")):
-                item_copy["is_crv"] = True
-                if not item_copy.get("default_category"):
+                if item_copy.get("default_category"):
+                    item_copy["is_crv"] = True
+                else:
                     _mark_crv(item_copy)
             normalized_items.append(item_copy)
             continue
@@ -245,7 +246,11 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
         target = None
         if target_num:
             target = next(
-                (i for i in reversed(normalized_items) if i["item_number"] == target_num and i["gross_amount"] > 0),
+                (
+                    i
+                    for i in reversed(normalized_items)
+                    if core_item_number(i["item_number"]) == core_item_number(target_num) and i["gross_amount"] > 0
+                ),
                 None,
             )
         # Count every coupon as savings, including one kept as its own discount line below

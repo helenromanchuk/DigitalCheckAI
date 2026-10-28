@@ -12,7 +12,7 @@ from app.money import allocate_cents
 
 # Version of the rules below. The split is stored with each receipt (receipts.tax_split_version), and receipts
 # split by other rules are split again on startup, so bump this whenever a change here alters any result
-SPLIT_RULES_VERSION = 2
+SPLIT_RULES_VERSION = 3
 
 # A California bottle deposit (CRV) line: "CA REDEMP VAL T EI/919140" is the deposit for item 919140; "T" means
 # the deposit itself is taxed, "N" that it isn't. Truncated wordings ("CA REDEMP VA"), a marker glued to the
@@ -117,6 +117,7 @@ def split_receipt(lines: list[dict[str, Any]], receipt_tax: float) -> list[dict[
     crv = {i: 0.0 for i in kept}
     base = {i: 0.0 for i in kept}
     may_be_taxed = {i: False for i in kept}
+    has_taxable = {i: False for i in kept}
     unknown = False
     for i in range(len(lines)):
         target = owners.get(i, i)
@@ -134,6 +135,7 @@ def split_receipt(lines: list[dict[str, Any]], receipt_tax: float) -> list[dict[
             may_be_taxed[target] = True
         if taxable:
             base[target] += amount
+            has_taxable[target] = True
 
     tax = round(float(receipt_tax or 0.0), 2)
     base_total = sum(base.values())
@@ -145,6 +147,12 @@ def split_receipt(lines: list[dict[str, Any]], receipt_tax: float) -> list[dict[
         # Rounded to cents, with the remainder on the last taxed line, so the column adds up to the receipt's tax
         taxed = [i for i in kept if base[i] != 0.0]
         taxes.update(zip(taxed, allocate_cents(tax, [base[i] for i in taxed]), strict=True))
+        # A taxable line whose sale and return cancel out is taxed, at $0.00; only untaxed lines get None
+        taxes.update({i: 0.0 for i in kept if has_taxable[i] and base[i] == 0.0})
+    elif tax and not any(may_be_taxed.values()):
+        # The receipt has tax but no line that may carry it (all flagged untaxed, or a taxed charge that
+        # isn't a line): no line's total can include it, so all of them are marked
+        may_be_taxed = {i: True for i in kept}
 
     results = []
     for i in range(len(lines)):
