@@ -158,9 +158,12 @@ def parse_warehouse_or_gas_receipt(raw_receipt: dict[str, Any]) -> dict[str, Any
 
         if is_disc:
             discount_val = abs(amount)
-            # If target_item_num isn't given, attach the coupon to the most recent item
-            if not target_item_num and normalized_items:
-                target_item_num = normalized_items[-1]["item_number"]
+            # If target_item_num isn't given, attach the coupon to the most recent item. A bottle deposit
+            # isn't one: it follows its item on the receipt, and a coupon never discounts it
+            if not target_item_num:
+                products = [i for i in normalized_items if not is_crv_line(i["raw_description"])]
+                if products:
+                    target_item_num = products[-1]["item_number"]
             pending_discounts.append((target_item_num, discount_val, raw_item))
             continue
 

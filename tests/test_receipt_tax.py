@@ -234,3 +234,23 @@ def test_normalized_crv_line_gets_the_parser_category():
         {"transactionBarcode": "1003", "transactionDate": "2026-06-03", "receiptType": "In-Warehouse", "items": [line]}
     )
     assert parsed["items"][0]["default_clean_name"] == CRV_NAME
+
+
+def test_coupon_without_item_number_skips_the_crv_line():
+    from app.scraper.parser import parse_warehouse_or_gas_receipt
+
+    parsed = parse_warehouse_or_gas_receipt(
+        {
+            "transactionBarcode": "1004",
+            "transactionDate": "2026-06-04",
+            "receiptType": "In-Warehouse",
+            "itemArray": [
+                {"itemNumber": "919140", "itemDescription01": "MILESTONE", "unit": 1, "amount": 9.99, "taxFlag": "Y"},
+                {"itemNumber": "1254", "itemDescription01": "CA REDEMP VAL T EI/919140", "unit": 1, "amount": 0.1},
+                {"itemNumber": "999", "itemDescription01": "INSTANT SAVINGS", "unit": -1, "amount": -3.0},
+            ],
+        }
+    )
+    wine, crv = parsed["items"]
+    assert (wine["net_amount"], wine["discount_amount"]) == (6.99, 3.0)
+    assert (crv["net_amount"], crv["discount_amount"]) == (0.1, 0.0)
