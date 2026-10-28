@@ -2,7 +2,6 @@
 from unittest.mock import Mock
 
 import pytest
-from keyring.backend import KeyringBackend
 
 from app import config
 
@@ -11,7 +10,9 @@ from app import config
 def credential_store(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ENV_PATH", tmp_path / ".env")
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    store = Mock(spec=KeyringBackend)
+    # Python 3.11's Mock evaluates class descriptors when inspecting a spec;
+    # KeyringBackend.priority is abstract and raises NotImplementedError.
+    store = Mock(spec_set=["get_password", "set_password"])
     store.get_password.return_value = None
 
     def save(service, account, value):
