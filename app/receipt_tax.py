@@ -12,7 +12,7 @@ from app.money import allocate_cents
 
 # Version of the rules below. The split is stored with each receipt (receipts.tax_split_version), and receipts
 # split by other rules are split again on startup, so bump this whenever a change here alters any result
-SPLIT_RULES_VERSION = 7
+SPLIT_RULES_VERSION = 8
 
 # A California bottle deposit (CRV) line: "CA REDEMP VAL T EI/919140" is the deposit for item 919140; "T" means
 # the deposit itself is taxed, "N" that it isn't. Truncated wordings ("CA REDEMP VA"), a marker glued to the
@@ -66,6 +66,13 @@ def _taxable(row: dict[str, Any], crv: tuple[str | None, bool | None] | None) ->
     return True if flag == "Y" else False if flag == "N" else None
 
 
+def _crv_link_key(item_number: object) -> tuple[str, str]:
+    """Store namespace and normalized number, including leading zeros after Safeway's prefix."""
+    number = str(item_number or "").strip()
+    prefix = "SWY-" if number.startswith("SWY-") else ""
+    return prefix, core_item_number(number[len(prefix):])
+
+
 def crv_owners(
     items: list[dict[str, Any]], infos: list[tuple[str | None, bool | None] | None] | None = None
 ) -> dict[int, int]:
@@ -80,15 +87,17 @@ def crv_owners(
     if infos is None:
         infos = [_crv_info(row.get("raw_description")) for row in items]
     links = {i: info[0] for i, info in enumerate(infos) if info is not None}
-    lines_by_item: dict[str, list[int]] = {}
+    lines_by_item: dict[tuple[str, str], list[int]] = {}
     for i, row in enumerate(items):
         if i not in links:
-            lines_by_item.setdefault(core_item_number(row.get("item_number")), []).append(i)
+            lines_by_item.setdefault(_crv_link_key(row.get("item_number")), []).append(i)
 
     owners: dict[int, int] = {}
     claimed: set[int] = set()
     for index, item_number in links.items():
-        candidates = lines_by_item.get(core_item_number(item_number)) if item_number else None
+        # References in the description are numeric; the deposit's own number supplies the store namespace.
+        namespace, _ = _crv_link_key(items[index].get("item_number"))
+        candidates = lines_by_item.get((namespace, core_item_number(item_number))) if item_number else None
         if not candidates:
             continue
         refund = float(items[index].get("net_amount") or 0.0) < 0

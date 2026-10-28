@@ -244,7 +244,12 @@ function renderPurchaseSearch(data, query) {
   const products = rows.filter(r => !r.is_deposit);
   const totalGross = products.reduce((sum, r) => sum + r.gross_amount, 0);
   const totalNet = products.reduce((sum, r) => sum + r.net_amount, 0);
-  const totalCrv = rows.reduce((sum, r) => sum + (r.is_deposit ? r.net_amount : r.crv_amount || 0), 0);
+  const productIds = new Set(products.map(r => r.id));
+  const totalCrv = rows.reduce((sum, r) => {
+    if (!r.is_deposit) return sum + (r.crv_amount || 0);
+    // The owner's CRV already includes this deposit when both rows match the search.
+    return sum + (r.crv_owner_id != null && productIds.has(r.crv_owner_id) ? 0 : r.net_amount);
+  }, 0);
   const stores = [...new Set(rows.map(r => STORE_LABELS[r.store] || r.store))].join(", ");
   summary.textContent = t("search.summary", {
     count: products.length,

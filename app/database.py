@@ -1055,6 +1055,8 @@ class Database:
                     r.receipt_type,
                     r.warehouse_name,
                     r.transaction_barcode,
+                    ri.id,
+                    ri.crv_owner_id,
                     ri.item_number,
                     ri.raw_description,
                     c.clean_name,

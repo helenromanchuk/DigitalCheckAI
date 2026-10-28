@@ -836,6 +836,16 @@ def test_item_number_after_a_space_links_the_deposit():
     assert is_crv_line("CA REDEMPTION VALUE")
 
 
+def test_crv_references_keep_their_store_namespace_and_normalize_leading_zeros():
+    items = [
+        _item("SWY-0001", "SAFEWAY WATER", 5.0),
+        _item("1", "COSTCO WATER", 5.0),
+        _item("SWY-2", "CA REDEMP VAL N 001", 0.1),
+        _item("2", "CA REDEMP VAL N 0001", 0.2),
+    ]
+    assert crv_owners(items) == {2: 0, 3: 1}
+
+
 def test_online_crv_line_gets_the_parser_category():
     from app.scraper.parser import CRV_NAME, parse_online_order
 
@@ -946,9 +956,12 @@ def test_search_finds_folded_deposits_by_their_own_text_only(tmp_path):
     assert deposit["is_deposit"] == 1 and deposit["net_amount"] == 0.1
     (wine,) = db.search_purchases("919140")
     assert wine["item_number"] == "919140" and wine["crv_amount"] == 0.1
+    assert deposit["crv_owner_id"] == wine["id"]
+    assert deposit["id"] != wine["id"] and wine["crv_owner_id"] is None
 
 
-def test_safeway_deposit_line_is_tagged_like_costco():
+def test_safeway_deposit_is_tagged_and_linked_to_its_product(tmp_path):
+    from app.database import Database
     from app.scraper.parser import CRV_NAME
     from app.scraper.safeway_client import parse_safeway_receipt
 
@@ -965,5 +978,26 @@ def test_safeway_deposit_line_is_tagged_like_costco():
              "discountTotal": "0", "reducedPriceTotal": "0.10"},
         ],
     }
-    deposit = parse_safeway_receipt(raw)["items"][1]
+    receipt = parse_safeway_receipt(raw)
+    deposit = receipt["items"][1]
     assert deposit["default_clean_name"] == CRV_NAME and deposit["is_crv"]
+    assert crv_owners(receipt["items"]) == {1: 0}
+
+    db = Database(tmp_path / "safeway_crv.db")
+    db.init_db()
+    db.upsert_receipts([receipt])
+    db.save_categorized_items(
+        [{"item_number": "SWY-1", "clean_name": "Water", "category": "Beverages"}]
+    )
+
+    # Simulate a saved receipt under the old rules, which left Safeway deposits orphaned.
+    with db.connect() as conn:
+        conn.execute("UPDATE receipts SET tax_split_version = 7")
+        conn.execute("UPDATE receipt_items SET crv_owner_id = NULL, crv_amount = 0")
+        conn.execute("UPDATE receipt_items SET crv_amount = net_amount WHERE is_deposit = 1")
+    db.init_db()
+
+    (water,) = db.get_receipts_list(store="safeway")[0]["items"]
+    assert water["item_number"] == "SWY-1" and water["crv_amount"] == 0.1
+    (category,) = db.get_statistics(store="safeway")["by_category"]
+    assert category["category"] == "Beverages" and category["net_spent"] == 5.1
