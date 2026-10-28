@@ -28,8 +28,9 @@ def is_crv_line(raw_description: str | None) -> bool:
 def crv_owners(items: list[dict[str, Any]]) -> dict[int, int]:
     """Maps the index of each CRV line to the index of the receipt line it belongs to, from the line descriptions.
 
-    The owner is the nearest earlier line with the linked item number, else the first later one; a CRV line
-    whose item isn't on the receipt has no owner.
+    The owner is the nearest earlier line with the linked item number that has no CRV yet ("wine, wine, CRV, CRV"
+    gives each bottle one deposit), else the nearest earlier one, else the first later one; a CRV line whose item
+    isn't on the receipt has no owner.
     """
     links = {i: link for i, row in enumerate(items) if (link := _crv_link(row.get("raw_description")))}
     lines_by_item: dict[str, list[int]] = {}
@@ -38,12 +39,16 @@ def crv_owners(items: list[dict[str, Any]]) -> dict[int, int]:
             lines_by_item.setdefault(str(row.get("item_number")), []).append(i)
 
     owners: dict[int, int] = {}
+    claimed: set[int] = set()
     for index, (item_number, _) in links.items():
         candidates = lines_by_item.get(item_number)
         if not candidates:
             continue
-        position = bisect_left(candidates, index)
-        owners[index] = candidates[position - 1] if position > 0 else candidates[0]
+        earlier = candidates[: bisect_left(candidates, index)]
+        free = [i for i in earlier if i not in claimed]
+        owner = free[-1] if free else earlier[-1] if earlier else candidates[0]
+        owners[index] = owner
+        claimed.add(owner)
     return owners
 
 
@@ -60,7 +65,8 @@ def add_tax_and_crv(items: list[dict[str, Any]], receipt_tax: float) -> list[dic
     proportion to the net amount of taxable items (taxable CRV lines count towards their item) and rounded to cents
     so the parts add up to the receipt's tax. tax_amount is None when there is nothing sensible to split the tax
     over: no taxable flags, or taxable lines that cancel out so the implied rate exceeds MAX_TAX_RATE. In that case
-    tax_unsplit is True on every item of a receipt that has tax, since none of them can show a total with tax.
+    tax_unsplit is True on the items of a receipt with tax that may carry some of it (all but those flagged "N",
+    whose total is exact), since they can't show a total with tax.
     """
     rows = [dict(item) for item in items]
     index_by_id = {row.get("id"): i for i, row in enumerate(rows)}
@@ -103,6 +109,6 @@ def add_tax_and_crv(items: list[dict[str, Any]], receipt_tax: float) -> list[dic
         row["crv_amount"] = round(crv[index], 2)
         row["tax_amount"] = taxes[index]
         row["tax_crv"] = round((taxes[index] or 0.0) + crv[index], 2)
-        row["tax_unsplit"] = bool(tax) and not split
+        row["tax_unsplit"] = bool(tax) and not split and str(row.get("tax_flag") or "").upper() != "N"
         result.append(row)
     return result

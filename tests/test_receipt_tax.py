@@ -254,3 +254,21 @@ def test_coupon_without_item_number_skips_the_crv_line():
     wine, crv = parsed["items"]
     assert (wine["net_amount"], wine["discount_amount"]) == (6.99, 3.0)
     assert (crv["net_amount"], crv["discount_amount"]) == (0.1, 0.0)
+
+
+def test_each_bottle_gets_its_own_deposit():
+    items = [
+        _item("942740", "PROSECCO", 9.99, "Y"),
+        _item("942740", "PROSECCO", 9.99, "Y"),
+        _item("1254", "CA REDEMP VAL T EI/942740", 0.10),
+        _item("1254", "CA REDEMP VAL T EI/942740", 0.10),
+    ]
+    assert sorted(crv_owners(items).values()) == [0, 1]
+    assert [r["crv_amount"] for r in add_tax_and_crv(items, 2.0)] == [0.10, 0.10]
+
+
+def test_untaxed_lines_keep_their_total_when_the_tax_is_not_split():
+    items = [_item("1", "TV", 100.00, "Y"), _item("1", "TV RETURN", -99.99, "Y"), _item("2", "KIWI", 5.0, "N")]
+    tv, tv_return, kiwi = add_tax_and_crv(items, 0.83)
+    assert tv["tax_unsplit"] and tv_return["tax_unsplit"]
+    assert kiwi["tax_unsplit"] is False
