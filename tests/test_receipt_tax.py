@@ -355,3 +355,22 @@ def test_orphan_deposit_is_taxed_by_its_description():
     soap, deposit = add_tax_and_crv(items, 1.0)
     assert soap["tax_amount"] == 1.0
     assert deposit["tax_amount"] is None
+
+
+def test_tax_free_receipt_shows_no_computed_zero_tax():
+    (row,) = add_tax_and_crv([_item("1", "SOAP", 10.0, "Y")], 0.0)
+    assert row["tax_amount"] is None
+    assert row["tax_unsplit"] is False
+
+
+def test_an_extra_deposit_stacks_on_the_nearest_bottle_either_side():
+    items = [_item("919140", "MILESTONE", 6.99, "Y")]
+    items += [_item(str(n), f"ITEM {n}", 1.0, "N") for n in range(5)]
+    items += [
+        _item("1254", "CA REDEMP VAL T EI/919140", 0.10),
+        _item("1254", "CA REDEMP VAL T EI/919140", 0.10),
+        _item("919140", "MILESTONE", 6.99, "Y"),
+        _item("1254", "CA REDEMP VAL T EI/919140", 0.10),
+    ]
+    owners = crv_owners(items)
+    assert owners[6] == 0 and owners[7] == 8 and owners[9] == 8

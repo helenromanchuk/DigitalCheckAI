@@ -56,8 +56,8 @@ def crv_owners(items: list[dict[str, Any]]) -> dict[int, int]:
         elif free_later:
             owner = free_later[0]
         else:
-            # More deposits than bottles: stack the extra one on the nearest bottle
-            owner = candidates[split_at - 1] if split_at else candidates[0]
+            # More deposits than bottles: stack the extra one on the nearest bottle, on either side
+            owner = min(candidates, key=lambda i: abs(i - index))
         owners[index] = owner
         claimed.add(owner)
     return owners
@@ -106,7 +106,9 @@ def add_tax_and_crv(items: list[dict[str, Any]], receipt_tax: float) -> list[dic
     tax = round(float(receipt_tax or 0.0), 2)
     base_total = sum(taxable_base.values())
     taxes: dict[int, float | None] = {i: None for i in kept}
-    split = abs(base_total) > 1e-9 and 0.0 <= tax / base_total <= MAX_TAX_RATE
+    # A tax-free receipt has nothing to split: its lines show "—", not a computed $0.00. Once the tax is split it
+    # all goes to the taxable lines, so a line without a "Y" flag gets None and its total is exact, not partial
+    split = bool(tax) and abs(base_total) > 1e-9 and 0.0 < tax / base_total <= MAX_TAX_RATE
     if split:
         taxed = [i for i in kept if taxable_base[i] != 0.0]
         for i in taxed:
