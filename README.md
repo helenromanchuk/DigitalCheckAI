@@ -12,7 +12,7 @@ A local web app that downloads receipts and orders from **costco.com** and **saf
 - **JSON import** for Costco and Safeway: ready-made export scripts for the browser console are in the "?" help next to the import button.
 - **Correct coupon handling (Instant Savings / TPD)**: discount lines are attached to their `Item #` and subtracted from its amount (`net_amount`).
 - **Smart categorization by `Item #`**:
-  1. The first time a new `Item #` appears, its abbreviated receipt name (e.g. `KS ORG EVOO`) is sent to the **Gemini API** (`gemini-2.5-flash`), which returns a full readable name and a category.
+  1. The first time a new `Item #` appears, its abbreviated receipt name (e.g. `KS ORG EVOO`) is sent to the **Gemini API** (`gemini-3.8-flash`), which returns a full readable name and a category.
   2. The result is stored in the local SQLite database (`data/costco.db` -> `item_catalog` table). Later purchases of the same `Item #` read it from the local database without calling Gemini again.
   3. You can **change any item's category or name by hand** at any time, right in the dashboard table, and the statistics for all receipts update immediately.
 
