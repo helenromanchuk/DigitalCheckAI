@@ -25,3 +25,5 @@ jobs:
       - run: ruff check .
       - run: pytest -q
       - run: bash -n run.sh
+      - if: runner.os == 'Linux'
+        run: shellcheck run.sh

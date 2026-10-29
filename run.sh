@@ -19,15 +19,22 @@ find_python() {
     return 1
 }
 
-if [ ! -x ".venv/bin/python" ]; then
+# Written only after a successful install, so an interrupted setup or a changed
+# requirements.txt makes the next run install again
+STAMP=".venv/requirements.installed"
+
+if [ ! -f "$STAMP" ]; then
     if ! PYTHON="$(find_python)"; then
         echo "Нужен Python 3.11+ (macOS: brew install python; Linux: пакет python3 и python3-venv)." >&2
         exit 1
     fi
     echo "Создание виртуального окружения .venv..."
-    # Remove a half-built environment so the next run retries the installation
-    if ! { "$PYTHON" -m venv .venv && .venv/bin/pip install -r requirements.txt; }; then
-        rm -rf .venv
+    "$PYTHON" -m venv --clear .venv
+fi
+
+if ! cmp -s requirements.txt "$STAMP"; then
+    echo "Установка зависимостей..."
+    if ! .venv/bin/pip install -r requirements.txt; then
         echo "Не удалось установить зависимости." >&2
         exit 1
     fi
@@ -37,12 +44,15 @@ if [ ! -x ".venv/bin/python" ]; then
         echo "Не удалось установить Chromium для Playwright. Для синхронизации установите Google Chrome." >&2
         echo "На Linux могут понадобиться системные библиотеки: sudo .venv/bin/playwright install-deps chromium" >&2
     fi
+    cp requirements.txt "$STAMP"
 fi
 
 open_browser() {
-    # Wait for the server so the page does not open on a connection error
+    # Wait for the server so the page does not open on a connection error;
+    # the venv's Python does the check because curl is missing on minimal Linux installs
     for _ in $(seq 1 30); do
-        if curl -s -o /dev/null "$URL" 2>/dev/null; then
+        if .venv/bin/python -c 'import sys, urllib.request; urllib.request.urlopen(sys.argv[1], timeout=1)' \
+            "http://127.0.0.1:8000" >/dev/null 2>&1; then
             break
         fi
         sleep 1
