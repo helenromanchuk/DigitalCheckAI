@@ -285,4 +285,4 @@ def save_gemini_api_key(api_key: str) -> None:
 
 def get_gemini_model() -> str:
     """Returns the Gemini model name used for categorization."""
-    return os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    return os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
