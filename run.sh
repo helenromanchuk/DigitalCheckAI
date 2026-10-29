@@ -21,9 +21,20 @@ find_python() {
     return 1
 }
 
-# Rebuild only when the interpreter does not run, e.g. after a Homebrew Python upgrade
-# removed the one the venv links to; a half-installed venv is kept and resumed
-if ! .venv/bin/python -c '' >/dev/null 2>&1; then
+venv_is_usable() {
+    # Python 3.11+ that runs and has pip. A Python upgrade that removed or replaced the
+    # interpreter the venv links to leaves pip behind in the old version's site-packages
+    .venv/bin/python -c 'import sys; sys.exit(sys.version_info < (3, 11))' >/dev/null 2>&1 &&
+        .venv/bin/python -m pip --version >/dev/null 2>&1
+}
+
+has_google_chrome() {
+    # The paths Playwright's channel="chrome" launches
+    [ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ] || [ -x /opt/google/chrome/chrome ]
+}
+
+# Rebuild only an unusable venv; a half-installed one is kept and resumed
+if ! venv_is_usable; then
     if ! PYTHON="$(find_python)"; then
         echo "Нужен Python 3.11+ (macOS: brew install python; Linux: пакет python3 и python3-venv)." >&2
         exit 1
@@ -43,7 +54,7 @@ CHROMIUM_STAMP=".venv/chromium.installed"
 
 if ! cmp -s requirements.txt "$REQUIREMENTS_STAMP"; then
     echo "Установка зависимостей..."
-    if ! .venv/bin/pip install -r requirements.txt; then
+    if ! .venv/bin/python -m pip install -r requirements.txt; then
         echo "Не удалось установить зависимости." >&2
         exit 1
     fi
@@ -52,9 +63,9 @@ if ! cmp -s requirements.txt "$REQUIREMENTS_STAMP"; then
     rm -f "$CHROMIUM_STAMP"
 fi
 
-if [ ! -f "$CHROMIUM_STAMP" ]; then
-    # Sync prefers installed Google Chrome, so bundled Chromium is only a fallback;
-    # Playwright does not ship it for older macOS and some Linux distributions
+# Sync prefers installed Google Chrome, so bundled Chromium is only a fallback;
+# Playwright does not ship it for older macOS and some Linux distributions
+if [ ! -f "$CHROMIUM_STAMP" ] && ! has_google_chrome; then
     if .venv/bin/playwright install chromium; then
         touch "$CHROMIUM_STAMP"
     else
@@ -63,9 +74,26 @@ if [ ! -f "$CHROMIUM_STAMP" ]; then
     fi
 fi
 
+# Otherwise the browser would open whatever already listens there while uvicorn fails to bind
+if ! .venv/bin/python - "$HOST" "$PORT" <<'PY'
+import socket
+import sys
+
+with socket.socket() as sock:
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind((sys.argv[1], int(sys.argv[2])))
+    except OSError:
+        sys.exit(1)
+PY
+then
+    echo "Порт $PORT уже занят: возможно, DigitalCheckAI уже запущен. Откройте $URL или остановите другой процесс." >&2
+    exit 1
+fi
+
 wait_for_server() {
-    # One Python process polls for up to 30 s. Proxies are bypassed and any HTTP
-    # response counts, so only a refused connection means "not started yet"
+    # One Python process polls for up to 30 s and fails on timeout. Proxies are bypassed
+    # and any HTTP response counts, so only a refused connection means "not started yet"
     .venv/bin/python - "http://$HOST:$PORT" <<'PY'
 import sys
 import time
@@ -75,19 +103,21 @@ import urllib.request
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 for _ in range(30):
     try:
-        opener.open(sys.argv[1], timeout=1)
-        break
+        with opener.open(sys.argv[1], timeout=1):
+            sys.exit(0)
     except urllib.error.HTTPError:
-        break
+        sys.exit(0)
     except OSError:
         time.sleep(1)
+sys.exit(1)
 PY
 }
 
 open_browser() {
     # Wait for the server so the page does not open on a connection error
-    wait_for_server
-    if command -v open >/dev/null 2>&1 && [ "$(uname)" = "Darwin" ]; then
+    if ! wait_for_server; then
+        echo "Сервер не ответил за 30 секунд. Когда он запустится, откройте $URL в браузере." >&2
+    elif command -v open >/dev/null 2>&1 && [ "$(uname)" = "Darwin" ]; then
         open "$URL"
     elif command -v xdg-open >/dev/null 2>&1; then
         xdg-open "$URL" >/dev/null 2>&1
