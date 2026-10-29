@@ -102,9 +102,13 @@ flowchart LR
 4. The classifier sends only new items to Gemini in batches (or uses a keyword fallback when no key is set or the API call fails). Manual edits (`is_manual_override`) are never overwritten.
 5. After a Safeway sync or a JSON import, product images are downloaded to `data/images`. Statistics, search and membership analytics are SQL aggregations over the local database.
 
-## Quick start (Windows)
+## Quick start
 
-Requires **Python 3.11+**. Double-click **`run.bat`** or run in a terminal:
+Requires **Python 3.11+**. Works on Windows, macOS and Linux. Sync opens a visible browser window for signing in, so it needs a desktop session (on Linux, an X11 or Wayland display).
+
+### Windows
+
+Double-click **`run.bat`** or run in a terminal:
 
 ```powershell
 python -m venv .venv
@@ -112,6 +116,19 @@ python -m venv .venv
 .\.venv\Scripts\playwright install chromium
 .\.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
+
+### macOS and Linux
+
+Run **`./run.sh`**, or step by step:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/playwright install chromium
+.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Sync uses an installed Google Chrome first and Playwright's Chromium as a fallback. Playwright does not ship Chromium for older systems such as macOS 12; there, `run.sh` prints a warning and sync needs Google Chrome. On Linux, Chromium may also need system libraries: `sudo .venv/bin/playwright install-deps chromium`. On Debian and Ubuntu, `python3 -m venv` requires the `python3-venv` package. Saving the Gemini key requires a running Secret Service provider such as GNOME Keyring or KWallet.
 
 Then open **http://localhost:8000** in your browser.
 
@@ -123,5 +140,8 @@ Then open **http://localhost:8000** in your browser.
 
 ## Running tests
 ```powershell
-.\.venv\Scripts\python -m pytest -v
+.\.venv\Scripts\python -m pytest -v   # Windows
+```
+```bash
+.venv/bin/python -m pytest -v          # macOS and Linux
 ```

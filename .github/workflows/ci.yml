@@ -10,9 +10,10 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        os: [ubuntu-latest, macos-latest]
         python-version: ["3.11", "3.14"]
     steps:
       - uses: actions/checkout@v4
@@ -23,3 +24,4 @@ jobs:
       - run: pip install -r requirements.txt ruff==0.17.3
       - run: ruff check .
       - run: pytest -q
+      - run: bash -n run.sh
