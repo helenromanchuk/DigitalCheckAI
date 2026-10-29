@@ -27,7 +27,7 @@ BROWSER_PROFILE_DIR = DATA_DIR / "browser_profile"
 IMAGES_DIR = DATA_DIR / "images"
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
-FUEL_CATEGORY = "Auto & fuel (Gas Station)"
+FUEL_CATEGORY = "Auto & fuel"
 ALCOHOL_CATEGORY = "Alcohol"
 OTHER_CATEGORY = "Other"
 
@@ -42,98 +42,147 @@ _DEFAULT_CATEGORIES_SPEC: list[tuple[str, str, str]] = [
         "(sliced turkey, ham, roast beef).",
     ),
     (
-        "Fruits, vegetables & berries",
-        "Овощи, фрукты и ягоды",
+        "Fruits & vegetables",
+        "Овощи и фрукты",
         "fresh produce, fruits, berries, vegetables, fresh herbs, salad mixes & kits, kimchi, living potted herbs.",
     ),
     (
-        "Dairy, cheese & eggs",
-        "Молочные продукты, сыр и яйца",
+        "Dairy & eggs",
+        "Молочные продукты и яйца",
         "milk, cream, butter, sour cream, yogurt, cultured/probiotic dairy drinks (Cool Plus, kefir), "
-        "all cheeses, eggs.",
+        "all cheeses, eggs. Dairy drinks stay here; plant-based milk belongs to Beverages, coffee & tea.",
     ),
     (
-        "Bakery, bread & prepared food (Deli)",
-        "Выпечка, хлеб и готовая еда (Deli)",
-        "bread, buns, baguettes, croissants, tortillas, naan, pita, cakes, pastries, crepes/pancakes, "
-        "and fresh prepared Costco Service Deli / ready-to-eat chilled meals (rotisserie chicken, sushi, poke, "
-        "refrigerated ravioli/pasta, prepared entrées in sauce).",
+        "Bread & bakery",
+        "Хлеб и выпечка",
+        "bread, buns, baguettes, croissants, tortillas, naan, pita, cakes, fresh pastries, crepes/pancakes. "
+        "Packaged cookies and crackers belong to Snacks & sweets; frozen baked goods belong to Frozen foods.",
     ),
     (
-        "Pantry, oils, spices & canned goods",
-        "Бакалея, масла, специи и консервы",
+        "Prepared meals & deli",
+        "Готовая еда",
+        "fresh/chilled prepared meals, rotisserie chicken, sushi, poke, refrigerated ravioli/pasta, "
+        "prepared entrées in sauce. Sliced deli meats belong to Meat, poultry & seafood; "
+        "salad kits belong to Fruits & vegetables; frozen meals belong to Frozen foods.",
+    ),
+    (
+        "Frozen foods",
+        "Замороженные продукты",
+        "all frozen food, including raw meat/fish, vegetables, berries, pizza, dumplings/potstickers/mandu, "
+        "burgers/patties, meatballs, appetizers, frozen bakery, ice cream. Frozen takes priority over food type. "
+        "Freeze-dried shelf-stable fruit belongs to Snacks & sweets.",
+    ),
+    (
+        "Pantry & cooking ingredients",
+        "Бакалея и продукты для готовки",
         "olive & cooking oils, vinegar, grains, rice, oats/granola/cereal, flour, sugar, yeast, dry pasta & "
         "instant noodle bowls, sauces, mayonnaise, marinades, spices/seasonings/rubs, honey, jams/fruit spreads, "
-        "olives, sauerkraut, canned goods.",
+        "olives, sauerkraut, canned goods. Coffee and tea belong to Beverages, coffee & tea.",
     ),
     (
-        "Frozen & ready meals",
-        "Заморозка и полуфабрикаты",
-        "frozen foods — dumplings/potstickers/mandu, frozen burgers/patties, frozen meatballs, frozen snacks/"
-        "appetizers (flautas, spanakopita, takoyaki, pizza), frozen breaded or portioned fish/seafood "
-        "(frozen Mahi-Mahi, frozen seafood mix, tortilla-crusted tilapia), frozen vegetables/berries/fruit, ice cream.",
-    ),
-    (
-        "Snacks, sweets, nuts & drinks",
-        "Снеки, сладости, орехи и напитки",
+        "Snacks & sweets",
+        "Снеки и сладости",
         "chocolate, candy, cookies, crackers, chips, nuts, trail mix, dried & freeze-dried fruit, "
-        "protein/granola bars, non-alcoholic beverages (water, juice, soda, kombucha, energy drinks), "
-        "and coffee (whole bean, ground, K-Cup pods) & tea.",
+        "protein/granola bars. Drinks belong to Beverages, coffee & tea.",
     ),
     (
-        "Household, paper & cleaning",
-        "Бытовая химия, бумага и уборка",
+        "Beverages, coffee & tea",
+        "Напитки, кофе и чай",
+        "non-alcoholic drinks: water, juice, soda, kombucha, energy drinks, plant-based milk, "
+        "coffee (whole bean, ground, K-Cup pods), tea. Dairy drinks stay in Dairy & eggs; "
+        "alcoholic drinks belong to Alcohol.",
+    ),
+    (
+        ALCOHOL_CATEGORY,
+        "Алкоголь",
+        "wine, prosecco, champagne, beer, spirits, sangria. Takes priority over non-alcoholic beverages.",
+    ),
+    (
+        "Household supplies & cleaning",
+        "Бытовые расходники и уборка",
         "laundry detergent, dish soap/pods, surface/oven/shoe cleaners, bath tissue/toilet paper, paper towels, "
-        "facial tissues, trash bags, disposable food storage bags (Ziploc), foil, parchment.",
+        "facial tissues, trash bags, disposable food storage bags (Ziploc), foil, parchment. "
+        "Reusable household goods belong to Home, kitchen & garden.",
     ),
     (
-        "Health, pharmacy, vitamins & personal care",
-        "Здоровье, аптека, витамины и гигиена",
+        "Health & personal care",
+        "Здоровье и личная гигиена",
         "vitamins, supplements, OTC medications, toothpaste, mouthwash, dental floss, razors/cartridges, deodorant, "
         "feminine care (pads, liners), shampoo, conditioner, body wash, skincare/creams/lotions, toner pads, "
         "sunscreen, cosmetics, massagers.",
     ),
     (
         "Home, kitchen & garden",
-        "Товары для дома, кухни и сада",
+        "Дом, кухня и сад",
         "cookware, reusable food storage containers & lunch boxes (Pyrex, Bentgo), cabinet/cosmetic organizers, "
-        "storage drawers, hangers, home textiles, gift wrap & ribbon, garden planters & decorative floral "
-        "arrangements, folding carts/hand trucks, multi-tools & hardware.",
+        "storage drawers, hangers, furniture, home textiles, gift wrap & ribbon, garden plants/planters & "
+        "decorative floral arrangements, folding carts/hand trucks, multi-tools & hardware. "
+        "Kitchen appliances belong to Electronics & appliances; disposable supplies go to Household supplies & cleaning.",
     ),
     (
-        "Clothing & shoes",
-        "Одежда и обувь",
+        "Clothing, shoes & accessories",
+        "Одежда, обувь и аксессуары",
         "men's, women's, and kids' apparel, underwear, socks, swimwear, shoes, gloves, hats/beanies, "
         "sunglasses/eyewear, bags & backpacks.",
     ),
     (
         "Electronics & appliances",
-        "Электроника и техника",
-        "electronics, headphones, appliances, portable fans, chargers, cables, and batteries "
+        "Электроника и бытовая техника",
+        "electronics, computers, headphones, appliances (including blenders and coffee makers), portable fans, "
+        "chargers, cables, and batteries "
         "(Duracell AA/AAA, rechargeable).",
     ),
     (
         FUEL_CATEGORY,
-        "Авто и заправка (Gas Station)",
-        "gasoline, diesel, motor oil, automotive supplies.",
+        "Авто и топливо",
+        "gasoline, diesel, tires, motor oil, automotive supplies.",
     ),
     (
-        ALCOHOL_CATEGORY,
-        "Алкоголь",
-        "wine, prosecco, champagne, beer, spirits, sangria.",
+        "Toys & games",
+        "Игрушки и игры",
+        "LEGO, dolls, toys, puzzles, board games. Baby supplies and pet items use a matching custom category "
+        "when present, otherwise Other.",
     ),
     (
         OTHER_CATEGORY,
         "Прочее",
-        "bottle deposits (`CA REDEMP VAL` / CRV), liquor liter taxes (`LIQUOR LITER TAX`), standalone store coupons/"
-        "adjustments (`CPN`, `/123456`), gift cards, and items (such as toys/`LEGO` when no kids/toys category is "
-        "in `Allowed categories`) that do not fit any other allowed category.",
+        "unmatched deposits/tax lines, standalone store coupons/adjustments (`CPN`, `/123456`), gift cards, "
+        "and items that do not fit any allowed category. Attached discounts and bottle deposits follow their "
+        "owner item's category; never classify them separately.",
     ),
 ]
 
 DEFAULT_CATEGORIES: list[str] = [name for name, _, _ in _DEFAULT_CATEGORIES_SPEC]
 DEFAULT_CATEGORY_LABELS_RU: dict[str, str] = {name: ru for name, ru, _ in _DEFAULT_CATEGORIES_SPEC}
 DEFAULT_CATEGORY_SCOPES: dict[str, str] = {name: scope for name, _, scope in _DEFAULT_CATEGORIES_SPEC}
+
+# Split categories use a conservative default; the migration separates meals and drinks by description.
+LEGACY_CATEGORY_ALIASES: dict[str, str] = {
+    "Fruits, vegetables & berries": "Fruits & vegetables",
+    "Овощи, фрукты и ягоды": "Fruits & vegetables",
+    "Dairy, cheese & eggs": "Dairy & eggs",
+    "Молочные продукты, сыр и яйца": "Dairy & eggs",
+    "Bakery, bread & prepared food (Deli)": "Bread & bakery",
+    "Выпечка, хлеб и готовая еда (Deli)": "Bread & bakery",
+    "Pantry, oils, spices & canned goods": "Pantry & cooking ingredients",
+    "Бакалея, масла, специи и консервы": "Pantry & cooking ingredients",
+    "Frozen & ready meals": "Frozen foods",
+    "Заморозка и полуфабрикаты": "Frozen foods",
+    "Snacks, sweets, nuts & drinks": "Snacks & sweets",
+    "Снеки, сладости, орехи и напитки": "Snacks & sweets",
+    "Household, paper & cleaning": "Household supplies & cleaning",
+    "Бытовая химия, бумага и уборка": "Household supplies & cleaning",
+    "Health, pharmacy, vitamins & personal care": "Health & personal care",
+    "Здоровье, аптека, витамины и гигиена": "Health & personal care",
+    "Товары для дома, кухни и сада": "Home, kitchen & garden",
+    "Clothing & shoes": "Clothing, shoes & accessories",
+    "Одежда и обувь": "Clothing, shoes & accessories",
+    "Электроника и техника": "Electronics & appliances",
+    "Auto & fuel (Gas Station)": FUEL_CATEGORY,
+    "Авто и заправка (Gas Station)": FUEL_CATEGORY,
+}
+
+
 def merge_category_labels_ru(custom_labels_ru: dict[str, str] | None = None) -> dict[str, str]:
     """Combines custom and default Russian category labels, with defaults taking precedence."""
     return {**(custom_labels_ru or {}), **DEFAULT_CATEGORY_LABELS_RU}

@@ -169,7 +169,7 @@ def test_online_order_tax_is_split_only_for_a_single_item():
 def test_upgrade_reparses_so_pending_crv_rows_leave_the_gemini_queue(tmp_path):
     import sqlite3
 
-    from app.database import CRV_SCHEMA_VERSION, ENGLISH_NAMES_SCHEMA_VERSION, Database
+    from app.database import CATEGORY_SCHEMA_VERSION, ENGLISH_NAMES_SCHEMA_VERSION, Database
     from app.scraper.parser import parse_any_costco_payload
 
     path = tmp_path / "upgrade.db"
@@ -198,7 +198,7 @@ def test_upgrade_reparses_so_pending_crv_rows_leave_the_gemini_queue(tmp_path):
     db.init_db()
     assert "1254" not in [i["item_number"] for i in db.get_pending_items_for_gemini()]
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == CRV_SCHEMA_VERSION
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == CATEGORY_SCHEMA_VERSION
 
 
 def test_unsplit_tax_is_flagged_on_the_receipt_and_the_item_total(tmp_path):

@@ -103,6 +103,11 @@ SYSTEM_INSTRUCTION = (
     "category if present, and pet items go to a pets category if present).\n"
     "- Default category boundaries:\n"
     f"{_CATEGORY_RULES_TEXT}\n\n"
+    "- Food sold frozen always goes to Frozen foods, regardless of food type. Freeze-dried fruit is a snack.\n"
+    "- Dairy drinks stay in Dairy & eggs; plant-based milk, coffee and tea go to Beverages, coffee & tea. "
+    "Alcoholic drinks go to Alcohol.\n"
+    "- Household supplies & cleaning covers consumables; reusable household goods go to Home, kitchen & garden. "
+    "Kitchen appliances go to Electronics & appliances.\n"
     "### 3. Output Completeness Requirements\n"
     "- Return an entry for **every** item in the input list in the exact same order.\n"
     "- Copy each item's integer `id` and `item_number` from the input list without modification."
@@ -147,7 +152,7 @@ def _build_classification_prompt(batch: list[dict[str, Any]], categories: list[s
 # Local fallback dictionary used until GEMINI_API_KEY is set
 FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
     (
-        ["UNLEADED", "GASOLINE", "FUEL", "DIESEL"],
+        ["UNLEADED", "GASOLINE", "FUEL", "DIESEL", "MOTOR OIL", "TIRES", "AUTOMOTIVE", "WINDSHIELD"],
         FUEL_CATEGORY,
         {"UNLEADED GASOLINE 87": "Costco Regular Unleaded 87 Gasoline"},
     ),
@@ -160,47 +165,67 @@ FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
         },
     ),
     (
-        ["ROTISSERIE", "CROISSANT", "BAGEL", "MUFFIN", "BREAD", "DELI", "PIZZA", "CAKE"],
-        "Bakery, bread & prepared food (Deli)",
+        ["CROISSANT", "BAGEL", "MUFFIN", "BREAD", "CAKE", "TORTILLA", "BAGUETTE", "PASTRY", "NAAN", "PITA"],
+        "Bread & bakery",
         {
-            "ROTISSERIE CHKN": "Kirkland Signature Rotisserie Chicken",
             "CROISSANTS 12CT": "Costco Bakery Croissants (12 ct)",
         },
     ),
     (
+        ["ROTISSERIE", "SUSHI", "POKE", "RAVIOLI", "READY MEAL", "PREPARED MEAL", "CHICKEN ALFREDO",
+         "MAC AND CHEESE", "MACARONI AND CHEESE", "STUFFED PEPPER", "MEATLOAF", "DELI MEAL", "MEATBALLS IN SAUCE"],
+        "Prepared meals & deli",
+        {"ROTISSERIE CHKN": "Kirkland Signature Rotisserie Chicken"},
+    ),
+    (
+        ["ICE CREAM", "POTSTICKER", "DUMPLING", "MANDU", "FROZEN PIZZA", "PIZZA", "TAKOYAKI", "SPANAKOPITA"],
+        "Frozen foods",
+        {},
+    ),
+    (
         ["STRAWBERR", "AVOCADO", "BANANA", "APPLE", "SPINACH", "SALAD", "TOMATO", "BLUEBERR", "GRAPE", "PRODUCE"],
-        "Fruits, vegetables & berries",
+        "Fruits & vegetables",
         {
             "ORG STRAWBERRIES": "Organic Strawberries",
             "ORG AVOCADOS 6CT": "Organic Avocados (6 ct)",
         },
     ),
     (
-        ["EGGS", "BUTTER", "MILK", "CHEESE", "YOGURT", "CREAM"],
-        "Dairy, cheese & eggs",
+        ["EGGS", "BUTTER", "MILK", "CHEESE", "YOGURT", "CREAM", "KEFIR", "COOL PLUS", "CHOCOLATE MILK"],
+        "Dairy & eggs",
         {
             "KS ORG EGGS 24CT": "Kirkland Signature Organic Eggs (24 ct)",
             "KERRYGOLD BUTTER": "Kerrygold Pure Irish Butter",
         },
     ),
     (
-        ["EVOO", "OLIVE OIL", "RICE", "PASTA", "COFFEE", "SAUCE", "HONEY", "SPICE", "FLOUR"],
-        "Pantry, oils, spices & canned goods",
+        ["EVOO", "OLIVE OIL", "RICE", "PASTA", "SAUCE", "HONEY", "SPICE", "FLOUR", "CEREAL", "OATS",
+         "PEANUT BUTTER", "ALMOND BUTTER", "WINE VINEGAR", "CANNED", "SUGAR", "SEASONING", "JAM", "SUSHI RICE"],
+        "Pantry & cooking ingredients",
         {
             "KS ORG EVOO 2L BOTTLE": "Kirkland Signature Organic Extra Virgin Olive Oil (2 L)",
             "KS ORG EVOO": "Kirkland Signature Organic Extra Virgin Olive Oil",
         },
     ),
     (
-        ["NUTS", "CHOC", "CHIPS", "COOKIE", "SNACK", "WATER", "SODA", "JUICE"],
-        "Snacks, sweets, nuts & drinks",
+        ["NUTS", "CHOC", "CHOCOLATE", "MILK CHOCOLATE", "CHIPS", "COOKIE", "SNACK", "CRACKER", "CANDY",
+         "TRAIL MIX", "DRIED FRUIT",
+         "FREEZE DRIED", "GRANOLA BAR", "PROTEIN BAR", "ALMOND", "CASHEW", "PISTACHIO"],
+        "Snacks & sweets",
         {
             "KS MIXED NUTS 40OZ": "Kirkland Signature Mixed Nuts (40 oz)",
         },
     ),
     (
-        ["CHARMIN", "BATH TISSUE", "TIDE", "BOUNTY", "CASCADE", "DETERGENT", "TRASH BAG", "PAPER TOWEL"],
-        "Household, paper & cleaning",
+        ["WATER", "SODA", "JUICE", "COFFEE", "TEA", "K CUP", "KOMBUCHA", "ENERGY DRINK", "BEVERAGE",
+         "ALMOND MILK", "OAT MILK", "SOY MILK", "COCONUT MILK BEVERAGE", "PLANT BASED MILK"],
+        "Beverages, coffee & tea",
+        {},
+    ),
+    (
+        ["CHARMIN", "BATH TISSUE", "TIDE", "BOUNTY", "CASCADE", "DETERGENT", "TRASH BAG", "PAPER TOWEL",
+         "FOIL", "PARCHMENT", "ZIPLOC", "TOILET PAPER", "DISH SOAP", "CLEANER", "FACIAL TISSUE", "FOOD STORAGE BAG"],
+        "Household supplies & cleaning",
         {
             "CHARMIN ULTRA SOFT": "Charmin Ultra Soft Toilet Paper",
             "KS BATH TISSUE": "Kirkland Signature Bath Tissue",
@@ -209,7 +234,7 @@ FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
     ),
     (
         ["COQ10", "VITAMIN", "ADVIL", "TYLENOL", "SHAMPOO", "TOOTHPASTE", "LOTION", "ALLERGY", "SUNSCREEN"],
-        "Health, pharmacy, vitamins & personal care",
+        "Health & personal care",
         {
             "COQ10 300MG 100CT": "Kirkland Signature CoQ10 300 mg (100 softgels)",
         },
@@ -222,25 +247,33 @@ FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
         },
     ),
     (
-        ["AIRPODS", "IPAD", "MACBOOK", "TV", "SAMSUNG", "SONY", "USB", "BATTERY", "CHARGER"],
+        ["AIRPODS", "IPAD", "MACBOOK", "TV", "SAMSUNG", "SONY", "USB", "BATTERY", "CHARGER", "BLENDER",
+         "COFFEE MAKER", "COFFEE MACHINE", "ESPRESSO MACHINE", "ICE CREAM MAKER", "MICROWAVE", "AIR FRYER",
+         "REFRIGERATOR", "FREEZER", "KEURIG BREWER"],
         "Electronics & appliances",
         {
             "APPLE AIRPODS PRO 2ND GEN USB-C": "Apple AirPods Pro 2 (USB-C)",
         },
     ),
     (
-        ["JEANS", "LEVIS", "SHIRT", "JACKET", "SOCKS", "SHOES", "PANTS", "HOODIE"],
-        "Clothing & shoes",
+        ["JEANS", "LEVIS", "SHIRT", "JACKET", "SOCKS", "SHOES", "PANTS", "HOODIE", "BACKPACK", "SUNGLASSES"],
+        "Clothing, shoes & accessories",
         {
             "LEVIS MENS JEANS": "Levi's Men's Jeans",
         },
     ),
     (
-        ["PYREX", "STORAGE", "PAN", "TOWEL", "PILLOW", "BLANKET", "BLENDER"],
+        ["PYREX", "STORAGE", "PAN", "TOWEL", "PILLOW", "BLANKET", "WATER BOTTLE", "COFFEE MUG",
+         "FOOD CONTAINER", "LUNCH BOX", "PLANTER", "FURNITURE"],
         "Home, kitchen & garden",
         {
             "PYREX GLASS STORAGE": "Pyrex Glass Food Storage Set",
         },
+    ),
+    (
+        ["LEGO", "LEGOSPEED", "DOLL", "TOY", "PUZZLE", "BOARD GAME", "PLAY DOH"],
+        "Toys & games",
+        {},
     ),
 ]
 
@@ -272,7 +305,7 @@ def _keyword_match_rank(keyword: str, words: list[str], text: str) -> int:
 
 
 def fallback_categorize_item(item_number: str, raw_description: str) -> dict[str, str]:
-    """Local dictionary-based decoding and categorization (used only when GEMINI_API_KEY is missing)."""
+    """Local decoding and categorization when Gemini is unavailable."""
     upper = raw_description.upper().strip()
     result = {
         "item_number": item_number,
@@ -286,16 +319,32 @@ def fallback_categorize_item(item_number: str, raw_description: str) -> dict[str
         if upper in exact_map:
             return {**result, "clean_name": exact_map[upper], "category": category}
 
+    # Normalize punctuation for phrases such as K-Cup and freeze-dried, keeping the original name intact.
+    words = re.findall(r"[A-Z0-9]+", upper)
+    text = " ".join(words)
     # Among keyword hits the best match wins (see _keyword_match_rank), then the longest keyword:
     # "AIRPODS" is more specific than "APPLE"
-    words = re.findall(r"[A-Z0-9]+", upper)
     best: tuple[int, int] = (0, 0)
     for keywords, category, _ in FALLBACK_RULES:
         for kw in keywords:
-            rank = _keyword_match_rank(kw, words, upper)
+            rank = _keyword_match_rank(kw, words, text)
             if rank and (rank, len(kw)) > best:
                 best = (rank, len(kw))
                 result["category"] = category
+    food_categories = {
+        "Meat, poultry & seafood", "Fruits & vegetables", "Dairy & eggs", "Bread & bakery",
+        "Prepared meals & deli", "Frozen foods", "Pantry & cooking ingredients", "Snacks & sweets",
+        "Beverages, coffee & tea",
+    }
+    if result["category"] in food_categories | {OTHER_CATEGORY}:
+        if "FROZEN" in words or "FRZN" in words or "FRZ" in words:
+            result["category"] = "Frozen foods"
+        elif "FREEZE DRIED" in text:
+            result["category"] = "Snacks & sweets"
+        elif ("SUSHI" in words and "SUSHI RICE" not in text) or "POKE" in words or "ROTISSERIE" in words:
+            result["category"] = "Prepared meals & deli"
+        elif result["category"] == "Frozen foods" and re.search(r"\b(FRESH|CHILLED|DELI)\b", text):
+            result["category"] = "Prepared meals & deli"
     return result
 
 

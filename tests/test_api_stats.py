@@ -75,7 +75,7 @@ def test_api_import_stats_and_category_override(tmp_path: Path, monkeypatch):
     assert res_gas.status_code == 200
     gas_stats = res_gas.json()
     assert gas_stats["summary"]["receipt_count"] == 1
-    assert gas_stats["by_category"][0]["category"] == "Auto & fuel (Gas Station)"
+    assert gas_stats["by_category"][0]["category"] == "Auto & fuel"
 
     # 4. Change the category of item #678910 via PATCH /api/items/678910
     res_patch = client.patch(

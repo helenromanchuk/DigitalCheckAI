@@ -13,6 +13,7 @@ from app.config import (
     DB_PATH,
     DEFAULT_CATEGORIES,
     DEFAULT_CATEGORY_LABELS_RU,
+    LEGACY_CATEGORY_ALIASES,
     OTHER_CATEGORY,
     default_category_lookup,
     is_english_category_name,
@@ -26,6 +27,7 @@ from app.unit_price import add_unit_prices
 REPARSE_SCHEMA_VERSION = 1
 ENGLISH_NAMES_SCHEMA_VERSION = 2
 CRV_SCHEMA_VERSION = 3
+CATEGORY_SCHEMA_VERSION = 4
 
 # The catalog row a receipt line counts under: a deposit folded into a bottle counts under the bottle's item
 _CATALOG_OF_LINE = """
@@ -222,10 +224,55 @@ class Database:
                 self._mark_crv_catalog_rows(conn)
                 conn.execute(f"PRAGMA user_version = {CRV_SCHEMA_VERSION}")
 
+        if schema_version < CATEGORY_SCHEMA_VERSION:
+            with self.connect() as conn:
+                self._migrate_category_taxonomy(conn)
+                self._merge_categories_clashing_with_defaults(conn)
+                conn.execute(f"PRAGMA user_version = {CATEGORY_SCHEMA_VERSION}")
+
         # Receipts not yet split, or split by older rules (an earlier build, or before SPLIT_RULES_VERSION was
         # bumped), are split with the current ones. Re-parsed receipts were split on saving, so each is done once
         with self.connect() as conn:
             self._split_outdated_receipts(conn)
+
+    @staticmethod
+    def _migrate_category_taxonomy(conn: sqlite3.Connection) -> None:
+        """Rename old defaults and split their purchases without calling Gemini or changing product names.
+
+        Custom categories and manual override flags survive. Ambiguous split items retain the closest
+        broad category (bread or snacks); only recognized meals/drinks move into the new categories.
+        """
+        from app.categorizer.gemini_classifier import fallback_categorize_item
+
+        aliases = {name.casefold(): target for name, target in LEGACY_CATEGORY_ALIASES.items()}
+        splits = {
+            "Bread & bakery": {"Prepared meals & deli", "Frozen foods", "Snacks & sweets"},
+            "Snacks & sweets": {"Beverages, coffee & tea", "Frozen foods"},
+        }
+        rows = conn.execute("SELECT * FROM item_catalog").fetchall()
+        for row in rows:
+            old = row["category"].strip()
+            target = aliases.get(old.casefold(), row["category"])
+            recognized = fallback_categorize_item(
+                row["item_number"], f"{row['clean_name']} {row['raw_description']}"
+            )["category"]
+            if old.casefold() in aliases and recognized in splits.get(target, set()):
+                target = recognized
+            if not row["is_manual_override"] and row["classified_by"] != "parser":
+                # Repair the former cross-category rules without second-guessing other Gemini assignments.
+                if (target, recognized) in {
+                    (OTHER_CATEGORY, "Toys & games"),
+                    ("Pantry & cooking ingredients", "Beverages, coffee & tea"),
+                    ("Home, kitchen & garden", "Electronics & appliances"),
+                }:
+                    target = recognized
+                if row["classified_by"] == "fallback" and target in DEFAULT_CATEGORIES and recognized != OTHER_CATEGORY:
+                    target = recognized
+            if target != row["category"]:
+                conn.execute("UPDATE item_catalog SET category = ? WHERE item_number = ?", (target, row["item_number"]))
+        for row in conn.execute("SELECT name FROM custom_categories").fetchall():
+            if row["name"].strip().casefold() in aliases:
+                conn.execute("DELETE FROM custom_categories WHERE name = ?", (row["name"],))
 
     @staticmethod
     def _mark_crv_catalog_rows(conn: sqlite3.Connection) -> None:
@@ -325,7 +372,10 @@ class Database:
         Rows without an English name keep their name; add_custom_category can translate them later.
         Default names keep their identity for the default-category normalization that follows.
         """
-        defaults = default_category_lookup()
+        defaults = {
+            **{name.casefold(): target for name, target in LEGACY_CATEGORY_ALIASES.items()},
+            **default_category_lookup(),
+        }
         rows = conn.execute("SELECT name, name_en FROM custom_categories WHERE TRIM(name_en) != ''").fetchall()
         for row in rows:
             old, new = row["name"], row["name_en"].strip()

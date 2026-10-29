@@ -106,7 +106,7 @@ def test_parse_gas_and_online_orders():
 
     gas = next(p for p in parsed if p["receipt_type"] == "gas")
     assert gas["transaction_barcode"] == "GAS-999"
-    assert gas["items"][0]["default_category"] == "Auto & fuel (Gas Station)"
+    assert gas["items"][0]["default_category"] == "Auto & fuel"
 
     online = next(p for p in parsed if p["receipt_type"] == "online")
     assert online["transaction_barcode"] == "ONLINE-987654321"
@@ -231,7 +231,7 @@ def test_fuel_keywords_used_only_when_document_type_is_unknown():
 
     r = parse_any_costco_payload([receipt])[0]
     assert r["receipt_type"] == "gas"
-    assert r["items"][0]["default_category"] == "Auto & fuel (Gas Station)"
+    assert r["items"][0]["default_category"] == "Auto & fuel"
 
 
 def test_unmatched_coupon_counts_as_savings_with_negative_quantity():
