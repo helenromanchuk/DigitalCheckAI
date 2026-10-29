@@ -470,7 +470,6 @@ class GeminiItemClassifier:
                 system_instruction=SYSTEM_INSTRUCTION,
                 response_mime_type="application/json",
                 response_schema=batch_schema,
-                temperature=0.1,
             ),
         )
         if logger.isEnabledFor(logging.DEBUG):
