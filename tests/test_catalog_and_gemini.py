@@ -2,7 +2,7 @@
 from pathlib import Path
 
 from app.categorizer.gemini_classifier import GeminiItemClassifier
-from app.database import CRV_SCHEMA_VERSION, Database
+from app.database import CATEGORY_SCHEMA_VERSION, Database
 from app.scraper.parser import parse_any_costco_payload
 
 
@@ -17,7 +17,7 @@ def test_first_time_gemini_classification_and_manual_override(tmp_path: Path, mo
                 "item_number": item["item_number"],
                 "raw_description": item["raw_description"],
                 "clean_name": f"Gemini Decoded: {item['raw_description']}",
-                "category": "Pantry, oils, spices & canned goods",
+                "category": "Pantry & cooking ingredients",
             }
             for item in batch
         ]
@@ -51,7 +51,7 @@ def test_first_time_gemini_classification_and_manual_override(tmp_path: Path, mo
     # The decoded name and category are saved in the local database
     catalog_map = db.get_existing_catalog_map(["678910"])
     assert catalog_map["678910"]["clean_name"] == "Gemini Decoded: KS ORG EVOO"
-    assert catalog_map["678910"]["category"] == "Pantry, oils, spices & canned goods"
+    assert catalog_map["678910"]["category"] == "Pantry & cooking ingredients"
     assert catalog_map["678910"]["classified_by"] == "gemini"
 
     # 2. Load a second receipt with the SAME Item #678910 -> Gemini must NOT be called again
@@ -73,17 +73,17 @@ def test_first_time_gemini_classification_and_manual_override(tmp_path: Path, mo
     # 3. The user manually changes the category of Item #678910
     updated_item = db.update_item_category_manual(
         item_number="678910",
-        category="Health, pharmacy, vitamins & personal care",
+        category="Health & personal care",
         clean_name="Оливковое масло Kirkland (Моё название)",
     )
     assert updated_item is not None
     assert updated_item["is_manual_override"] == 1
-    assert updated_item["category"] == "Health, pharmacy, vitamins & personal care"
+    assert updated_item["category"] == "Health & personal care"
 
     # Stats for both receipts immediately move to the new category
     stats = db.get_statistics(start_date="2026-10-01", end_date="2026-10-31")
     assert len(stats["by_category"]) == 1
-    assert stats["by_category"][0]["category"] == "Health, pharmacy, vitamins & personal care"
+    assert stats["by_category"][0]["category"] == "Health & personal care"
     assert stats["by_category"][0]["net_spent"] == 49.98
 
 
@@ -131,7 +131,7 @@ def test_gemini_unknown_item_numbers_are_ignored(tmp_path: Path):
                 "id": 0,
                 "item_number": "0123456 ",
                 "clean_name": "Olive Oil",
-                "category": "Pantry, oils, spices & canned goods",
+                "category": "Pantry & cooking ingredients",
             },
             # Wrong item_number for id=0 (e.g. if Gemini skipped an item and shifted neighbors) must be rejected
             {"id": 0, "item_number": "999999", "clean_name": "ShiftedNeighbor", "category": "Other"},
@@ -169,15 +169,15 @@ def test_fallback_prefers_exact_names_and_specific_keywords():
     # No substring hits inside other words
     assert category("PRICE MATCH ADJ") == "Other"
     # A keyword at the end of a compound names the thing; plurals of short keywords match
-    assert category("PINEAPPLE CHUNKS") == "Fruits, vegetables & berries"
-    assert category("CHEESECAKE") == "Bakery, bread & prepared food (Deli)"
-    assert category("FLATBREAD") == "Bakery, bread & prepared food (Deli)"
+    assert category("PINEAPPLE CHUNKS") == "Fruits & vegetables"
+    assert category("CHEESECAKE") == "Bread & bakery"
+    assert category("FLATBREAD") == "Bread & bakery"
     assert category("FRY PANS 2PK") == "Home, kitchen & garden"
-    assert category("TVORT CHEESE") == "Dairy, cheese & eggs"
+    assert category("TVORT CHEESE") == "Dairy & eggs"
     # Prefix keywords still work
-    assert category("ORG STRAWBERRIES 2LB") == "Fruits, vegetables & berries"
-    assert category("SUNSCREEN CREAM SPF50") == "Health, pharmacy, vitamins & personal care"
-    assert category("BOUNTY PAPER TOWEL 12CT") == "Household, paper & cleaning"
+    assert category("ORG STRAWBERRIES 2LB") == "Fruits & vegetables"
+    assert category("SUNSCREEN CREAM SPF50") == "Health & personal care"
+    assert category("BOUNTY PAPER TOWEL 12CT") == "Household supplies & cleaning"
 
 
 def test_fuel_keeps_parser_category_and_skips_classifier(tmp_path: Path):
@@ -197,7 +197,7 @@ def test_fuel_keeps_parser_category_and_skips_classifier(tmp_path: Path):
     assert db.get_pending_items_for_gemini() == []
     with db.connect() as conn:
         row = conn.execute("SELECT category, classified_by FROM item_catalog WHERE item_number = '800877'").fetchone()
-    assert (row["category"], row["classified_by"]) == ("Auto & fuel (Gas Station)", "parser")
+    assert (row["category"], row["classified_by"]) == ("Auto & fuel", "parser")
 
 
 def test_existing_pending_fuel_and_orphan_rows_are_not_sent_to_classifier(tmp_path: Path):
@@ -228,7 +228,7 @@ def test_existing_pending_fuel_and_orphan_rows_are_not_sent_to_classifier(tmp_pa
     assert db.get_pending_items_for_gemini() == []
     with db.connect() as conn:
         row = conn.execute("SELECT category, classified_by FROM item_catalog WHERE item_number = '800877'").fetchone()
-    assert (row["category"], row["classified_by"]) == ("Auto & fuel (Gas Station)", "parser")
+    assert (row["category"], row["classified_by"]) == ("Auto & fuel", "parser")
 
 
 def test_resync_moves_pending_row_to_parser_category(tmp_path: Path):
@@ -251,7 +251,7 @@ def test_resync_moves_pending_row_to_parser_category(tmp_path: Path):
 
     with db.connect() as conn:
         row = conn.execute("SELECT category, classified_by FROM item_catalog WHERE item_number = '800877'").fetchone()
-    assert (row["category"], row["classified_by"]) == ("Auto & fuel (Gas Station)", "parser")
+    assert (row["category"], row["classified_by"]) == ("Auto & fuel", "parser")
 
 
 def test_gemini_item_numbers_differing_by_leading_zeros_and_duplicate_ids(tmp_path: Path):
@@ -320,14 +320,14 @@ def test_migration_unlocks_groceries_an_old_parser_took_for_fuel(tmp_path: Path)
     assert receipt_type == "warehouse"
     assert {(r["category"], r["classified_by"]) for r in rows} == {("Other", "pending")}
     assert {i["item_number"] for i in db.get_pending_items_for_gemini()} == {"1000001", "1000002"}
-    assert version == CRV_SCHEMA_VERSION
+    assert version == CATEGORY_SCHEMA_VERSION
 
 
 def test_unmatched_coupon_does_not_overwrite_product_with_same_number(tmp_path: Path):
     db = Database(tmp_path / "test_costco.db")
     db.save_categorized_items(
         [{"item_number": "1234567", "raw_description": "KS EVOO", "clean_name": "Olive Oil",
-          "category": "Pantry, oils, spices & canned goods"}]
+          "category": "Pantry & cooking ingredients"}]
     )
 
     db.upsert_receipts(
@@ -347,7 +347,7 @@ def test_unmatched_coupon_does_not_overwrite_product_with_same_number(tmp_path: 
     with db.connect() as conn:
         row = conn.execute("SELECT clean_name, category FROM item_catalog WHERE item_number = '1234567'").fetchone()
         coupon = conn.execute("SELECT classified_by FROM item_catalog WHERE item_number = 'DISCOUNT-222'").fetchone()
-    assert (row["clean_name"], row["category"]) == ("Olive Oil", "Pantry, oils, spices & canned goods")
+    assert (row["clean_name"], row["category"]) == ("Olive Oil", "Pantry & cooking ingredients")
     assert coupon["classified_by"] == "parser"
 
 
@@ -423,7 +423,7 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path):
                             "id": 0,
                             "item_number": "7989311562",
                             "clean_name": "O Organics Broth (32 fl oz)",
-                            "category": "Pantry, oils, spices & canned goods",
+                            "category": "Pantry & cooking ingredients",
                         },
                         {
                             "id": 1,
@@ -484,7 +484,7 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path):
             "item_number": "SWY-7989311562",
             "raw_description": "O ORGNC BROTH 32OZ",
             "clean_name": "O Organics Broth (32 fl oz)",
-            "category": "Pantry, oils, spices & canned goods",
+            "category": "Pantry & cooking ingredients",
         },
         {
             "item_number": "9001",
@@ -531,13 +531,13 @@ def test_safeway_and_costco_same_digits_never_overwrite_each_other(tmp_path: Pat
                     "id": 0,
                     "item_number": "01234",
                     "clean_name": "Kirkland Olive Oil",
-                    "category": "Pantry, oils, spices & canned goods",
+                    "category": "Pantry & cooking ingredients",
                 },
                 {
                     "id": 1,
                     "item_number": "swy-01234",
                     "clean_name": "O Organics Milk",
-                    "category": "Dairy, cheese & eggs",
+                    "category": "Dairy & eggs",
                 },
             ]
         ),
@@ -557,7 +557,7 @@ def test_safeway_and_costco_same_digits_never_overwrite_each_other(tmp_path: Pat
                     "id": 0,
                     "item_number": "1234",
                     "clean_name": "Kirkland Olive Oil",
-                    "category": "Pantry, oils, spices & canned goods",
+                    "category": "Pantry & cooking ingredients",
                 }
             ]
         ),
@@ -809,7 +809,7 @@ def test_startup_migrates_russian_categories_to_english(tmp_path: Path):
         rows = dict(conn.execute("SELECT item_number, category FROM item_catalog").fetchall())
     assert rows == {
         "1": "Kids",
-        "2": "Pantry, oils, spices & canned goods",
+        "2": "Pantry & cooking ingredients",
         "3": "Other",
         "4": "Other",
         # "Вино" had the English name "Alcohol": it is renamed to it, which merges it into the default

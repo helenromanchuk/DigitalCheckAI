@@ -144,7 +144,7 @@ def test_search_purchases_across_stores(tmp_path: Path, monkeypatch):
         ],
     }
     test_db.upsert_receipts([costco_receipt, parse_safeway_receipt(SAMPLE_SAFEWAY_RECEIPT)])
-    test_db.update_item_category_manual("555", "Pantry, oils, spices & canned goods", "Чатни из манго")
+    test_db.update_item_category_manual("555", "Pantry & cooking ingredients", "Чатни из манго")
 
     res = client.get("/api/search?q=mango")
     assert res.status_code == 200
@@ -211,7 +211,7 @@ def test_items_search_is_case_insensitive_for_cyrillic_and_slash_item_numbers(tm
              "gross_amount": 3.0, "discount_amount": 0.0, "net_amount": 3.0},
         ],
     }])
-    test_db.update_item_category_manual("SWY-MILK 1/2 GAL", "Dairy, cheese & eggs", "Молоко 2%")
+    test_db.update_item_category_manual("SWY-MILK 1/2 GAL", "Dairy & eggs", "Молоко 2%")
 
     rows = client.get("/api/items?store=all&search=МОЛОКО").json()["items"]
     assert [r["item_number"] for r in rows] == ["SWY-MILK 1/2 GAL"]

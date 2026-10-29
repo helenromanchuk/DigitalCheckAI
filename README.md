@@ -16,6 +16,43 @@ A local web app that downloads receipts and orders from **costco.com** and **saf
   2. The result is stored in the local SQLite database (`data/costco.db` -> `item_catalog` table). Later purchases of the same `Item #` read it from the local database without calling Gemini again.
   3. You can **change any item's category or name by hand** at any time, right in the dashboard table, and the statistics for all receipts update immediately.
 
+## Purchase categories
+
+The dashboard has 18 defaults, with English names and Russian labels:
+
+| English | Russian |
+| --- | --- |
+| Meat, poultry & seafood | Мясо, птица и морепродукты |
+| Fruits & vegetables | Овощи и фрукты |
+| Dairy & eggs | Молочные продукты и яйца |
+| Bread & bakery | Хлеб и выпечка |
+| Prepared meals & deli | Готовая еда |
+| Frozen foods | Замороженные продукты |
+| Pantry & cooking ingredients | Бакалея и продукты для готовки |
+| Snacks & sweets | Снеки и сладости |
+| Beverages, coffee & tea | Напитки, кофе и чай |
+| Alcohol | Алкоголь |
+| Household supplies & cleaning | Бытовые расходники и уборка |
+| Health & personal care | Здоровье и личная гигиена |
+| Home, kitchen & garden | Дом, кухня и сад |
+| Clothing, shoes & accessories | Одежда, обувь и аксессуары |
+| Electronics & appliances | Электроника и бытовая техника |
+| Auto & fuel | Авто и топливо |
+| Toys & games | Игрушки и игры |
+| Other | Прочее |
+
+Frozen food takes priority over its ingredients; freeze-dried fruit stays in Snacks & sweets. Dairy drinks
+stay in Dairy & eggs, plant-based milk goes to Beverages, coffee & tea, and alcoholic drinks go to Alcohol.
+Household supplies are consumables; reusable goods go to Home, kitchen & garden, and kitchen appliances
+go to Electronics & appliances. Attached discounts and bottle deposits count toward their item's category.
+You can add custom categories such as Pets or Baby supplies when needed.
+
+On first startup after the upgrade, existing category names are migrated locally. Recognizable prepared
+meals and beverages are separated from the former combined categories; ambiguous items stay in Bread &
+bakery or Snacks & sweets. Automatically categorized LEGO, coffee and kitchen appliances are moved to
+their new categories. Custom categories, product names, manual override flags and receipt amounts are
+preserved. The upgrade does not call Gemini.
+
 ## Architecture
 
 ```mermaid
