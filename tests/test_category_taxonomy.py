@@ -33,6 +33,18 @@ from app.scraper.parser import parse_any_costco_payload
     ("FREEZE-DRIED STRAWBERRIES", "Snacks & sweets"),
     ("MILK CHOCOLATE", "Snacks & sweets"),
     ("CHOCOLATE MILK", "Dairy & eggs"),
+    ("TORTILLA CHIPS", "Snacks & sweets"),
+    ("KS ORGANIC TORTILLA-CHIPS", "Snacks & sweets"),
+    ("TORTILLAS", "Bread & bakery"),
+    ("DARK CHOCOLATE", "Snacks & sweets"),
+    ("CHOCOLATE CHIPS", "Snacks & sweets"),
+    ("CHOCOLATE WINE", "Alcohol"),
+    ("CHOCOLATE BEER", "Alcohol"),
+    ("DARK CHOCOLATE COFFEE", "Beverages, coffee & tea"),
+    ("CHOCOLATE FLAVORED COFFEE", "Beverages, coffee & tea"),
+    ("DARK CHOCOLATE TEA", "Beverages, coffee & tea"),
+    ("CHOCOLATE COFFEE MAKER", "Electronics & appliances"),
+    ("CHOCOLATE WINE VINEGAR", "Pantry & cooking ingredients"),
     ("PEANUT BUTTER", "Pantry & cooking ingredients"),
     ("ALMOND MILK", "Beverages, coffee & tea"),
     ("OAT MILK", "Beverages, coffee & tea"),
@@ -72,6 +84,31 @@ def test_eighteen_defaults_have_unique_translations():
     ]
     assert list(DEFAULT_CATEGORY_LABELS_RU) == DEFAULT_CATEGORIES
     assert len(set(DEFAULT_CATEGORY_LABELS_RU.values())) == 18
+
+
+def test_upgrade_preserves_fallback_snacks_and_chocolate_beverages(tmp_path):
+    path = tmp_path / "fallback_categories.db"
+    db = Database(path)
+    cases = [
+        ("TORTILLA CHIPS", "Snacks, sweets, nuts & drinks", "Snacks & sweets"),
+        ("CHOCOLATE WINE", "Alcohol", "Alcohol"),
+        ("DARK CHOCOLATE COFFEE", "Snacks, sweets, nuts & drinks", "Beverages, coffee & tea"),
+    ]
+    db.save_categorized_items([
+        {"item_number": str(i), "raw_description": desc, "clean_name": desc.title(), "category": old}
+        for i, (desc, old, _) in enumerate(cases)
+    ], classified_by="fallback")
+    with db.connect() as conn:
+        conn.execute("PRAGMA user_version = 3")
+
+    for _ in range(2):
+        db = Database(path)
+        catalog = db.get_existing_catalog_map([str(i) for i in range(len(cases))])
+        for i, (desc, _, expected) in enumerate(cases):
+            row = catalog[str(i)]
+            assert row["category"] == expected
+            assert row["clean_name"] == desc.title()
+            assert row["classified_by"] == "fallback"
 
 
 def test_taxonomy_upgrade_preserves_custom_edits_and_receipt_totals(tmp_path):
