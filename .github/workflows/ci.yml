@@ -24,6 +24,8 @@ jobs:
       - run: pip install -r requirements.txt ruff==0.17.3
       - run: ruff check .
       - run: pytest -q
-      - run: bash -n run.sh
-      - if: runner.os == 'Linux'
+      # The launcher does not depend on the Python version, so check it once per OS
+      - if: matrix.python-version == '3.14'
+        run: bash -n run.sh
+      - if: runner.os == 'Linux' && matrix.python-version == '3.14'
         run: shellcheck run.sh
