@@ -561,24 +561,63 @@ class Database:
             ).fetchall()
         return {row["item_number"]: dict(row) for row in rows}
 
+    # Catalog items in the form Gemini gets them; {where} picks which
+    _GEMINI_ITEMS_SQL = """
+        SELECT
+            c.item_number,
+            c.raw_description,
+            c.clean_name,
+            c.category,
+            MAX(ri.unit_price) AS sample_unit_price
+        FROM item_catalog c
+        JOIN receipt_items ri ON ri.item_number = c.item_number
+        WHERE {where}
+        GROUP BY c.item_number
+    """
+
     def get_pending_items_for_gemini(self) -> list[dict[str, Any]]:
         """Returns item_catalog items that haven't been decoded by Gemini or by hand yet."""
+        where = "c.is_manual_override = 0 AND c.classified_by NOT IN ('gemini', 'parser')"
         with self.connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT
-                    c.item_number,
-                    c.raw_description,
-                    c.clean_name,
-                    c.category,
-                    MAX(ri.unit_price) AS sample_unit_price
-                FROM item_catalog c
-                JOIN receipt_items ri ON ri.item_number = c.item_number
-                WHERE c.is_manual_override = 0 AND c.classified_by NOT IN ('gemini', 'parser')
-                GROUP BY c.item_number
-                """
-            ).fetchall()
+            rows = conn.execute(self._GEMINI_ITEMS_SQL.format(where=where)).fetchall()
         return [dict(r) for r in rows]
+
+    def get_item_for_gemini(self, item_number: str) -> dict[str, Any] | None:
+        """
+        Returns one item to decode again, whoever decoded it before (Gemini, the fallback, or the user).
+        None for an unknown item and for one whose category comes from the receipt itself (parser).
+        """
+        where = "c.item_number = ? AND c.classified_by != 'parser'"
+        with self.connect() as conn:
+            row = conn.execute(self._GEMINI_ITEMS_SQL.format(where=where), (item_number,)).fetchone()
+        return dict(row) if row else None
+
+    def save_reclassified_item(self, item: dict[str, Any]) -> dict[str, Any] | None:
+        """
+        Saves a name and category Gemini decoded again for an item the user asked about. Unlike
+        save_categorized_items it replaces a manual edit too: the user chose to ask Gemini instead.
+        Returns the updated item_catalog row, or None if the item is gone or is a parser item.
+        """
+        now = datetime.now(UTC).isoformat()
+        item_number = str(item["item_number"]).strip()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE item_catalog
+                SET clean_name = ?,
+                    category = ?,
+                    is_manual_override = 0,
+                    classified_by = 'gemini',
+                    updated_at = ?
+                WHERE item_number = ? AND classified_by != 'parser'
+                """,
+                (str(item["clean_name"]).strip(), str(item["category"]).strip(), now, item_number),
+            )
+            row = conn.execute(
+                "SELECT * FROM item_catalog WHERE item_number = ? AND classified_by = 'gemini'",
+                (item_number,),
+            ).fetchone()
+        return dict(row) if row else None
 
     def save_categorized_items(self, items: list[dict[str, Any]], classified_by: str = "gemini") -> int:
         """

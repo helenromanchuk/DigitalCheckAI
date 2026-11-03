@@ -184,3 +184,102 @@ def test_membership_card_profitability_analytics(tmp_path: Path, monkeypatch):
     assert mb2["comparison"]["spend_needed_for_breakeven"] == 0.0
 
     app.dependency_overrides.clear()
+
+
+def test_api_reclassify_item_asks_gemini_again(tmp_path: Path, monkeypatch):
+    import types as pytypes
+
+    test_db = Database(tmp_path / "api_test.db")
+    app.dependency_overrides[get_db] = lambda: test_db
+    monkeypatch.setattr("app.categorizer.gemini_classifier.get_gemini_api_key", lambda: "")
+    client = TestClient(app)
+
+    payload = [
+        {
+            "transactionBarcode": "2401084700201",
+            "transactionDate": "2026-10-17",
+            "receiptType": "In-Warehouse",
+            "warehouseName": "SAN JOSE #148",
+            "subTotal": 16.99,
+            "taxes": 0.0,
+            "total": 16.99,
+            "itemArray": [
+                {"itemNumber": "1207907", "itemDescription01": "UNSLT BUTTER 4-8OZ", "unit": 1, "amount": 16.99},
+            ],
+        },
+        {
+            "transactionBarcode": "2401084700202",
+            "transactionDate": "2026-10-04",
+            "receiptType": "Fuel",
+            "documentType": "FuelReceipt",
+            "warehouseName": "SAN JOSE GAS #148",
+            "total": 52.40,
+            "itemArray": [
+                {"itemNumber": "800877", "itemDescription01": "UNLEADED GASOLINE 87", "unit": 12.2, "amount": 52.40},
+            ],
+        },
+    ]
+    res = client.post(
+        "/api/import", files={"file": ("receipts.json", json.dumps(payload).encode("utf-8"), "application/json")}
+    )
+    assert res.status_code == 200
+    # The user named the butter by hand
+    assert client.patch(
+        "/api/items/1207907", json={"category": "Dairy & eggs", "clean_name": "Kirkland Signature Butter"}
+    ).status_code == 200
+
+    def catalog_row(item_number):
+        return test_db.get_existing_catalog_map([item_number])[item_number]
+
+    # Without a key there's no fallback: the item keeps its name
+    res = client.post("/api/items/1207907/reclassify")
+    assert res.status_code == 400
+    assert res.json()["detail"]["code"] == "gemini_key_missing"
+    assert catalog_row("1207907")["clean_name"] == "Kirkland Signature Butter"
+
+    monkeypatch.setattr("app.categorizer.gemini_classifier.get_gemini_api_key", lambda: "test-key")
+    sent: list = []
+
+    def answer(**kw):
+        sent.append(kw["contents"])
+        reply = {
+            "items": [
+                {
+                    "id": 0,
+                    "item_number": "1207907",
+                    "clean_name": "Kirkland Signature Unsalted Butter (4 x 8 oz)",
+                    "category": "Dairy & eggs",
+                }
+            ]
+        }
+        return pytypes.SimpleNamespace(text=json.dumps(reply))
+
+    fake_client = pytypes.SimpleNamespace(models=pytypes.SimpleNamespace(generate_content=answer))
+    monkeypatch.setattr("app.categorizer.gemini_classifier._make_gemini_client", lambda key: fake_client)
+
+    # Gemini's answer replaces the manual edit, without the guessed brand
+    res = client.post("/api/items/1207907/reclassify")
+    assert res.status_code == 200
+    assert res.json()["item"]["clean_name"] == "Unsalted Butter (4 x 8 oz)"
+    assert "UNSLT BUTTER 4-8OZ" in sent[0] and '"sample_unit_price":16.99' in sent[0]
+    row = catalog_row("1207907")
+    assert (row["clean_name"], row["is_manual_override"], row["classified_by"]) == (
+        "Unsalted Butter (4 x 8 oz)", 0, "gemini"
+    )
+
+    # A failed request leaves the item as it was
+    def fail(**kw):
+        raise TimeoutError("timed out")
+
+    fake_client.models.generate_content = fail
+    res = client.post("/api/items/1207907/reclassify")
+    assert res.status_code == 400
+    assert res.json()["detail"]["code"] == "gemini_failed"
+    assert catalog_row("1207907")["clean_name"] == "Unsalted Butter (4 x 8 oz)"
+
+    # Fuel gets its category from the receipt, so Gemini doesn't decode it; unknown items aren't found
+    assert catalog_row("800877")["classified_by"] == "parser"
+    for item_number in ("800877", "999999"):
+        res = client.post(f"/api/items/{item_number}/reclassify")
+        assert res.status_code == 404
+        assert res.json()["detail"]["code"] == "item_not_found"

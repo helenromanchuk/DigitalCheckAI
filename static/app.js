@@ -716,7 +716,11 @@ function renderItemsTable(data) {
           ${optionsHtml}
         </select>
       </td>
-      <td class="px-3 py-2.5 text-center">${badgeHtml}</td>
+      <td class="px-3 py-2.5 text-center whitespace-nowrap">
+        ${badgeHtml}
+        ${item.classified_by === "parser" ? "" : `<button type="button" title="${escapeHtml(t("items.reclassifyTitle"))}" aria-label="${escapeHtml(t("items.reclassifyTitle"))}"
+          class="reclassify-btn ml-1 px-1 text-slate-400 hover:text-blue-600 focus:ring-2 rounded disabled:opacity-40 disabled:cursor-wait">↻</button>`}
+      </td>
     `;
     // Handlers are attached here rather than inline: Safeway item numbers are built from names
     // and may contain quotes that would break an onchange="..." attribute
@@ -724,6 +728,7 @@ function renderItemsTable(data) {
     const categorySelect = tr.querySelector("select");
     nameInput.addEventListener("change", () => updateItemCategory(item.item_number, categorySelect.value, nameInput.value));
     categorySelect.addEventListener("change", () => updateItemCategory(item.item_number, categorySelect.value, null));
+    tr.querySelector(".reclassify-btn")?.addEventListener("click", event => reclassifyItem(item, event.currentTarget));
     tbody.appendChild(tr);
   }
 }
@@ -751,6 +756,32 @@ async function updateItemCategory(itemNumber, category, newCleanName) {
       hasCode ? apiErrorText(detail, "banner.itemFailed", { item: itemNumber }) : t("banner.itemFailed", { item: itemNumber }),
       "error"
     );
+  }
+}
+
+// Items whose category comes from the receipt itself (parser) have no button: Gemini doesn't decode them
+async function reclassifyItem(item, button) {
+  const itemNumber = item.item_number;
+  if (item.is_manual_override && !confirm(t("items.reclassifyConfirm", { item: itemNumber }))) return;
+  button.disabled = true;
+  showBanner(t("banner.itemReclassifying", { item: itemNumber }), "info");
+  let res;
+  try {
+    res = await fetch(`/api/items/${encodeURIComponent(itemNumber)}/reclassify`, { method: "POST" });
+  } catch (error) {
+    console.error("Reclassify request failed:", error);
+    showBanner(t("banner.itemReclassifyFailed", { item: itemNumber }), "error");
+    button.disabled = false;
+    return;
+  }
+  const body = await res.json().catch(() => ({}));
+  if (res.ok) {
+    showBanner(t("banner.itemReclassified", { item: itemNumber, name: body.item.clean_name }), "success");
+    // The table is rebuilt, so the button doesn't need enabling again
+    await Promise.all([loadStats(), loadMembershipAnalytics(), loadItemsTable(), loadReceiptsList()]);
+  } else {
+    showBanner(apiErrorText(body.detail, "banner.itemReclassifyFailed", { item: itemNumber }), "error");
+    button.disabled = false;
   }
 }
 
