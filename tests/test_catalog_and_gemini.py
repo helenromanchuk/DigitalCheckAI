@@ -456,6 +456,9 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path):
     assert "fl oz" in SYSTEM_INSTRUCTION
     assert "Master Case" in SYSTEM_INSTRUCTION
     assert "Custom user-defined categories take priority" in SYSTEM_INSTRUCTION
+    assert "Decode, don't guess" in SYSTEM_INSTRUCTION
+    assert "Write `Kirkland Signature` only when `raw_description` contains `KS` or `KIRKLAND`" in SYSTEM_INSTRUCTION
+    assert "`UNSLT BUTTER 4-8OZ C15 T9H5 SL90` -> `Unsalted Butter (4 x 8 oz)`" in SYSTEM_INSTRUCTION
     assert not re.search(r"[А-Яа-яЁё]", SYSTEM_INSTRUCTION)
     assert not re.search(r"[А-Яа-яЁё]", json.dumps(CategorizedItemSchema.model_json_schema(), ensure_ascii=False))
 
@@ -499,6 +502,61 @@ def test_gemini_prompt_schema_and_safeway_prefix_handling(tmp_path: Path):
             "category": "Other",
         },
     ]
+
+
+
+def test_drop_unsupported_kirkland():
+    from app.categorizer.gemini_classifier import _drop_unsupported_kirkland
+
+    # No KS or KIRKLAND on the receipt: the guessed brand goes
+    assert _drop_unsupported_kirkland(
+        "Kirkland Signature Unsalted Butter (4 x 8 oz)", "UNSLT BUTTER 4-8OZ C15 T9H5 SL90"
+    ) == "Unsalted Butter (4 x 8 oz)"
+    assert _drop_unsupported_kirkland(
+        "Organic kirkland signature Coconut Water", "COCONUT WATR SL360                P120"
+    ) == "Organic Coconut Water"
+    # The receipt names the brand, or the item is Costco's own without a mark
+    assert _drop_unsupported_kirkland(
+        "Kirkland Signature Unsalted Butter (2 x 1 lb)", "KS UNSLTD 18/2-1 LB T10H5P900  SL90"
+    ) == "Kirkland Signature Unsalted Butter (2 x 1 lb)"
+    assert _drop_unsupported_kirkland(
+        "Kirkland Signature Asolo Prosecco Superiore DOCG", "KIRKLAND PROSECCO"
+    ) == "Kirkland Signature Asolo Prosecco Superiore DOCG"
+    assert _drop_unsupported_kirkland(
+        "Kirkland Signature Rotisserie Chicken", "ROTISSERIE USDA GRADE A"
+    ) == "Kirkland Signature Rotisserie Chicken"
+    # "KS" must be a word of its own, not part of one ("SNACKS")
+    assert _drop_unsupported_kirkland(
+        "Kirkland Signature Fruit Snacks", "FRUIT SNACKS 80CT"
+    ) == "Fruit Snacks"
+    # A name that is only the brand stays as is rather than becoming empty
+    assert _drop_unsupported_kirkland("Kirkland Signature", "MYSTERY") == "Kirkland Signature"
+
+
+def test_gemini_batch_drops_guessed_kirkland_brand(tmp_path: Path):
+    import json
+    import types as pytypes
+
+    db = Database(tmp_path / "test_costco.db")
+    categories = db.get_all_categories()
+    batch = [{"item_number": "1207907", "raw_description": "UNSLT BUTTER 4-8OZ C15 T9H5 SL90"}]
+    reply = {
+        "items": [
+            {
+                "id": 0,
+                "item_number": "1207907",
+                "clean_name": "Kirkland Signature Unsalted Butter (4 x 8 oz)",
+                "category": "Dairy & eggs",
+            }
+        ]
+    }
+    client = pytypes.SimpleNamespace(
+        models=pytypes.SimpleNamespace(
+            generate_content=lambda **kw: pytypes.SimpleNamespace(text=json.dumps(reply))
+        )
+    )
+    results = GeminiItemClassifier(db)._call_gemini_batch(batch, categories, client)
+    assert [r["clean_name"] for r in results] == ["Unsalted Butter (4 x 8 oz)"]
 
 
 def test_safeway_and_costco_same_digits_never_overwrite_each_other(tmp_path: Path):

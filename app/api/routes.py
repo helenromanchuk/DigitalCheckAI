@@ -274,6 +274,13 @@ def get_items(
     return {"items": items, "categories": db.get_all_categories()}
 
 
+def _item_not_found(item_number: str) -> HTTPException:
+    return HTTPException(
+        status_code=404,
+        detail=AppError("item_not_found", f"Item {item_number} not found in the catalog.", item=item_number).to_detail(),
+    )
+
+
 # ":path" so that item numbers with "/" (Safeway numbers built from names, e.g. "MILK 1/2 GAL") still match
 @router.patch("/items/{item_number:path}")
 def update_item_category(
@@ -291,13 +298,24 @@ def update_item_category(
     except AppError as exc:
         raise HTTPException(status_code=400, detail=exc.to_detail()) from exc
     if not updated:
-        raise HTTPException(
-            status_code=404,
-            detail=AppError(
-                "item_not_found", f"Item {item_number} not found in the catalog.", item=item_number
-            ).to_detail(),
-        )
+        raise _item_not_found(item_number)
     return {"status": "ok", "item": updated, "categories": db.get_all_categories()}
+
+
+@router.post("/items/{item_number:path}/reclassify")
+def reclassify_item(item_number: str, db: Database = Depends(get_db)) -> dict[str, Any]:
+    """Asks Gemini to decode the given Item # again, replacing its name and category, a manual edit too."""
+    item = db.get_item_for_gemini(item_number)
+    if item is None:
+        raise _item_not_found(item_number)
+    try:
+        result = GeminiItemClassifier(db).reclassify_item(item)
+    except AppError as exc:
+        raise HTTPException(status_code=400, detail=exc.to_detail()) from exc
+    updated = db.save_reclassified_item(result)
+    if not updated:
+        raise _item_not_found(item_number)
+    return {"status": "ok", "item": updated}
 
 
 @router.get("/receipts")

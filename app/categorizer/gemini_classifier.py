@@ -19,6 +19,7 @@ from app.config import (
     is_english_category_name,
 )
 from app.database import Database
+from app.errors import AppError
 from app.item_number import core_item_number
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,13 @@ SYSTEM_INSTRUCTION = (
     "Your task is to decode abbreviated receipt descriptions (`raw_description`) into clean, accurate "
     "English product names (`clean_name`) and classify each item strictly using the provided `Allowed categories`.\n\n"
     "### 1. Rules for Decoding `clean_name` (in English)\n"
+    "- **Decode, don't guess**: every part of `clean_name` must come from `raw_description`, either as written "
+    "or as an expanded abbreviation (`CG` -> `Crystal Geyser`, `PRECSN` -> `Precision`). Do not add a brand, "
+    "origin, variety, flavor, grade, or claim (`Organic`, `Wild Alaskan`, `Tail-On`, `Large`) that "
+    "`raw_description` does not show, and do not add a package size it does not show. "
+    "A plain, correct name is better than a specific, wrong one.\n"
+    "  - Write `Kirkland Signature` only when `raw_description` contains `KS` or `KIRKLAND`: Costco also sells "
+    "other brands under generic descriptions.\n"
     "- **Brand & retail abbreviations**:\n"
     "  - Costco: `KS` = Kirkland Signature, `ORG`/`ORGNC`/`OG` = Organic, `EVOO` = Extra Virgin Olive Oil, "
     "`CHKN`/`CKN`/`CHX` = Chicken, `BNLS/SL` or `BS` = Boneless Skinless, `BRST` = Breast, `GRND`/`GB` = Ground Beef, "
@@ -93,8 +101,7 @@ SYSTEM_INSTRUCTION = (
     "  - Count-only items without weight: `(N ct)` or `(N-Pack)` (e.g., `(72 ct)`, `(3-Pack)`).\n"
     "- **No speculative slash-guessing (`/`)**:\n"
     "  - Never output slash-separated guesses (e.g., do NOT write `Brand A / Brand B`, `Men's / Women's`, or "
-    "`Chocolate / Cheese`). Include a specific brand or flavor only when it is unambiguously supported by "
-    "`raw_description` and `item_number`; otherwise write a clean, factual product name.\n\n"
+    "`Chocolate / Cheese`).\n\n"
     "### 2. Rules for Selecting `category`\n"
     "- Return the exact `category` value from `Allowed categories` in the user prompt.\n"
     "- **Custom user-defined categories take priority**: If `Allowed categories` includes custom categories beyond "
@@ -108,7 +115,19 @@ SYSTEM_INSTRUCTION = (
     "Alcoholic drinks go to Alcohol.\n"
     "- Household supplies & cleaning covers consumables; reusable household goods go to Home, kitchen & garden. "
     "Kitchen appliances go to Electronics & appliances.\n"
-    "### 3. Output Completeness Requirements\n"
+    "### 3. Examples of `raw_description` -> `clean_name`\n"
+    "- `UNSLT BUTTER 4-8OZ C15 T9H5 SL90` -> `Unsalted Butter (4 x 8 oz)` (no brand on the receipt, so none "
+    "in the name; not `Kirkland Signature Unsalted Butter`)\n"
+    "- `KS UNSLTD 18/2-1 LB T10H5P900  SL90` -> `Kirkland Signature Unsalted Butter (2 x 1 lb)` "
+    "(`KS` is Kirkland Signature; `18` is the master case)\n"
+    "- `WILD SALMON 12/36OZ T10XH5     P600` -> `Wild Salmon (36 oz)` (not `Wild Alaskan`; `12` is the master case)\n"
+    "- `SAUERKRAUT 8/50 OZ  T10H8P640 SL120` -> `Sauerkraut (50 oz)` (no brand on the receipt)\n"
+    "- `SHRIMP 31/40 6T 6H P576 SL90` -> `Shrimp 31-40 ct` (`31/40` is the count per pound; "
+    "the receipt shows no package size)\n"
+    "- `PRECSN CHARD NAPA VALLEY CA 12/750ML` -> `Precision Napa Valley Chardonnay (750 ml)` "
+    "(`PRECSN` is an abbreviated brand)\n"
+    "- `KS BODYWASH 27 FL OZ P312` -> `Kirkland Signature Body Wash (27 fl oz)`\n\n"
+    "### 4. Output Completeness Requirements\n"
     "- Return an entry for **every** item in the input list in the exact same order.\n"
     "- Copy each item's integer `id` and `item_number` from the input list without modification."
 )
@@ -379,6 +398,25 @@ def _same_item_number(returned: str, expected: str, batch_inums: set[str]) -> bo
     return core_item_number(_SWY_PREFIX_RE.sub("", ret)) == core_item_number(_SWY_PREFIX_RE.sub("", exp))
 
 
+_KIRKLAND_BRAND_RE = re.compile(r"\bKirkland Signature\b\s*", re.IGNORECASE)
+_KIRKLAND_ON_RECEIPT_RE = re.compile(r"\b(?:KS|KIRKLAND)\b")
+# Costco's own products that the receipt doesn't mark as Kirkland
+_UNMARKED_KIRKLAND_KEYWORDS = ("ROTISSERIE",)
+
+
+def _drop_unsupported_kirkland(clean_name: str, raw_description: str) -> str:
+    """Removes a "Kirkland Signature" brand that Gemini guessed for a receipt line without KS or KIRKLAND."""
+    upper = raw_description.upper()
+    if _KIRKLAND_ON_RECEIPT_RE.search(upper) or any(kw in upper for kw in _UNMARKED_KIRKLAND_KEYWORDS):
+        return clean_name
+    return _KIRKLAND_BRAND_RE.sub("", clean_name).strip() or clean_name
+
+
+def _is_real_api_key(api_key: str) -> bool:
+    """False for a missing key and for the placeholder from .env.example."""
+    return bool(api_key) and api_key != "your_gemini_api_key_here"
+
+
 def _make_gemini_client(api_key: str) -> Any:
     """Creates a Gemini API client with a finite HTTP timeout."""
     from google import genai
@@ -411,20 +449,9 @@ class GeminiItemClassifier:
             return {"classified_count": 0, "provider": "none"}
 
         api_key = get_gemini_api_key()
-        # Gemini only gets English text: a category without an English name (from an old database) is left out
-        categories = []
-        for cat in self.db.get_all_categories():
-            if is_english_category_name(cat):
-                categories.append(cat)
-            else:
-                logger.warning(
-                    "Категория %r не на английском и не отправляется в Gemini. Чтобы перевести её, добавьте "
-                    "категорию с английским названием и русским названием %r.",
-                    cat,
-                    cat,
-                )
+        categories = self._gemini_categories()
 
-        if not api_key or api_key == "your_gemini_api_key_here":
+        if not _is_real_api_key(api_key):
             logger.info("GEMINI_API_KEY не задан — используется локальный резервный классификатор.")
             return {"classified_count": self._save_fallback(items), "provider": "fallback"}
 
@@ -453,6 +480,41 @@ class GeminiItemClassifier:
                 total_saved += self._save_fallback(missing)
 
         return {"classified_count": total_saved, "provider": "gemini"}
+
+    def reclassify_item(self, item: dict[str, Any]) -> dict[str, str]:
+        """
+        Decodes one item with Gemini again (see Database.get_item_for_gemini) and returns its new name
+        and category without saving them. Unlike classify_new_items there is no fallback: when Gemini
+        isn't set up or fails, an AppError says so and the item keeps the name it has.
+        """
+        api_key = get_gemini_api_key()
+        if not _is_real_api_key(api_key):
+            raise AppError("gemini_key_missing", "Set a Gemini API key to decode items again.")
+        try:
+            client = _make_gemini_client(api_key)
+            results = self._call_gemini_batch([item], self._gemini_categories(), client)
+        except Exception as exc:
+            logger.warning("Ошибка вызова Gemini API для артикула %s: %s", item["item_number"], exc)
+            raise AppError("gemini_failed", f"The Gemini API request failed: {exc}", reason=str(exc)) from exc
+        if not results:
+            raise AppError("gemini_no_answer", "Gemini returned no answer for this item.")
+        return results[0]
+
+    def _gemini_categories(self) -> list[str]:
+        """Categories Gemini may choose from: only English ones, as Gemini gets only English text."""
+        categories = []
+        for cat in self.db.get_all_categories():
+            if is_english_category_name(cat):
+                categories.append(cat)
+            else:
+                # A category without an English name comes from an old database
+                logger.warning(
+                    "Категория %r не на английском и не отправляется в Gemini. Чтобы перевести её, добавьте "
+                    "категорию с английским названием и русским названием %r.",
+                    cat,
+                    cat,
+                )
+        return categories
 
     def _save_fallback(self, items: list[dict[str, Any]]) -> int:
         """Categorizes items with the local keyword rules and saves them as 'fallback'."""
@@ -520,10 +582,15 @@ class GeminiItemClassifier:
             if cat not in categories:
                 logger.warning("Gemini вернул неизвестную категорию %r для артикула %s", cat, inum)
                 cat = OTHER_CATEGORY
+            clean_name = str(entry.get("clean_name") or raw_desc or inum).strip()
+            # The prompt forbids guessing the brand, but the model still does it sometimes
+            checked_name = _drop_unsupported_kirkland(clean_name, raw_desc)
+            if checked_name != clean_name:
+                logger.info("Убран угаданный бренд Kirkland для артикула %s: %r", inum, clean_name)
             results_by_id[item_id] = {
                 "item_number": inum,
                 "raw_description": raw_desc or inum,
-                "clean_name": str(entry.get("clean_name") or raw_desc or inum).strip(),
+                "clean_name": checked_name,
                 "category": cat,
             }
         return list(results_by_id.values())
