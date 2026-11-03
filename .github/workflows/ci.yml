@@ -9,21 +9,48 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - run: pip install ruff==0.17.3
+      - run: ruff check --output-format github .
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: JavaScript syntax check
+        run: find static -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: JavaScript tests
+        run: node --test tests/test_search_totals.js
+
   test:
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         python-version: ["3.11", "3.14"]
+        include:
+          # The app is primarily run on Windows via run.bat
+          - os: windows-latest
+            python-version: "3.14"
+    env:
+      # Tests mock Gemini; make sure no real key is ever used
+      GEMINI_API_KEY: ""
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: pip install -r requirements.txt ruff==0.17.3
-      - run: ruff check .
-      - run: pytest -q
+      - run: pip install -r requirements.txt
+      - run: python -m pytest -q
 
   launcher:
     runs-on: ${{ matrix.os }}
