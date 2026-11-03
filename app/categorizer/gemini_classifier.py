@@ -209,6 +209,7 @@ FALLBACK_RULES: list[tuple[list[str], str, dict[str, str]]] = [
     ),
     (
         ["NUTS", "CHOC", "CHOCOLATE", "MILK CHOCOLATE", "CHIPS", "COOKIE", "SNACK", "CRACKER", "CANDY",
+         "TORTILLA CHIPS", "CHOCOLATE COVERED", "CHOCOLATE COATED", "CHOCOLATE DIPPED", "FILLED CHOCOLATE",
          "TRAIL MIX", "DRIED FRUIT",
          "FREEZE DRIED", "GRANOLA BAR", "PROTEIN BAR", "ALMOND", "CASHEW", "PISTACHIO"],
         "Snacks & sweets",
@@ -322,11 +323,23 @@ def fallback_categorize_item(item_number: str, raw_description: str) -> dict[str
     # Normalize punctuation for phrases such as K-Cup and freeze-dried, keeping the original name intact.
     words = re.findall(r"[A-Z0-9]+", upper)
     text = " ".join(words)
+    # Chocolate must describe the beverage, not a confection containing a beverage ingredient.
+    # Keep explicit candy/coating/filling descriptions as snacks, including plural chocolates.
+    chocolate_flavors_beverage = not re.search(
+        r"\b(?:COVERED|COATED|DIPPED|FILLED|TRUFFLES?|CANDY|CANDIES|COOKIES?|BARS?)\b", text
+    ) and any(
+        re.search(rf"\bCHOCOLATE(?: FLAVOU?RED)? {re.escape(kw)}\b", text)
+        for keywords, category, _ in FALLBACK_RULES
+        if category in {"Beverages, coffee & tea", ALCOHOL_CATEGORY}
+        for kw in keywords
+    )
     # Among keyword hits the best match wins (see _keyword_match_rank), then the longest keyword:
     # "AIRPODS" is more specific than "APPLE"
     best: tuple[int, int] = (0, 0)
     for keywords, category, _ in FALLBACK_RULES:
         for kw in keywords:
+            if chocolate_flavors_beverage and kw == "CHOCOLATE":
+                continue
             rank = _keyword_match_rank(kw, words, text)
             if rank and (rank, len(kw)) > best:
                 best = (rank, len(kw))
