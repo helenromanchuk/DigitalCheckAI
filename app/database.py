@@ -1105,15 +1105,40 @@ class Database:
             result.append(item)
         return result
 
-    def search_purchases(self, query: str, limit: int = 500) -> list[dict[str, Any]]:
+    # Text search: item number, receipt description (a deposit's own text, without the bottle's item number
+    # folded onto its end), or decoded name
+    _SEARCH_FUZZY_PREDICATE = """
+        casefold(ri.item_number) LIKE ?
+        OR casefold(
+            CASE WHEN ri.crv_owner_id IS NULL THEN ri.raw_description
+                 ELSE rtrim(ri.raw_description, '0123456789/ ') END
+        ) LIKE ?
+        OR casefold(c.clean_name) LIKE ?
+    """
+    _SEARCH_EXACT_PREDICATE = "ri.item_number = ?"
+
+    def search_purchases(
+        self, query: str | None = None, limit: int = 500, *, item_number: str | None = None
+    ) -> list[dict[str, Any]]:
         """
-        Searches item purchases across all stores and all time by item number, receipt
-        description, and decoded name. One row per receipt line, newest first.
+        Searches item purchases across all stores and all time, either by text (item number, receipt
+        description, decoded name) or by one exact item number. One row per receipt line, newest first,
+        at most `limit` rows. Exactly one of `query` and `item_number` must be given.
         """
-        q = f"%{query.strip().casefold()}%"
+        if (query is None) == (item_number is None):
+            raise ValueError("Provide exactly one of query or item_number")
+        if query is not None and not query.strip():
+            raise ValueError("A blank query would match every purchase")
+        if item_number is not None:
+            predicate = self._SEARCH_EXACT_PREDICATE
+            params: tuple[Any, ...] = (item_number, limit)
+        else:
+            q = f"%{query.strip().casefold()}%"
+            predicate = self._SEARCH_FUZZY_PREDICATE
+            params = (q, q, q, limit)
         with self.connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT
                     substr(r.transaction_date, 1, 10) AS purchase_date,
                     r.store,
@@ -1139,16 +1164,11 @@ class Database:
                 JOIN item_catalog c ON c.item_number = ri.item_number
                 -- A deposit folded into a bottle is found by its own text ("CA REDEMP", "1254", "CRV"), not by
                 -- the bottle's item number at the end of its description: the bottle's row already shows it
-                WHERE casefold(ri.item_number) LIKE ?
-                   OR casefold(
-                        CASE WHEN ri.crv_owner_id IS NULL THEN ri.raw_description
-                             ELSE rtrim(ri.raw_description, '0123456789/ ') END
-                      ) LIKE ?
-                   OR casefold(c.clean_name) LIKE ?
+                WHERE {predicate}
                 ORDER BY r.transaction_date DESC, ri.id ASC
                 LIMIT ?
                 """,
-                (q, q, q, limit),
+                params,
             ).fetchall()
         return [add_unit_prices(dict(r), "net_amount", "quantity") for r in rows]
 

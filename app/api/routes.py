@@ -318,14 +318,31 @@ def get_receipts(
     return {"receipts": receipts}
 
 
+# Most purchases one search returns; the response says when there were more
+SEARCH_LIMIT = 500
+
+
 @router.get("/search")
 def search_purchases(
-    q: str = Query(..., min_length=2),
+    q: str | None = Query(default=None, min_length=2),
+    item_number: str | None = Query(default=None, min_length=1),
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
     """Searches item purchases across all stores and all time."""
-    results = db.search_purchases(q)
-    return {"query": q, "results": results}
+    if (q is None) == (item_number is None):
+        raise HTTPException(status_code=422, detail="Provide either q or item_number.")
+    # min_length counts spaces, but the search strips them: "  " would match every purchase
+    if q is not None and len(q.strip()) < 2:
+        raise HTTPException(status_code=422, detail="q needs at least 2 non-space characters.")
+    # One extra row tells whether the results were cut off
+    results = db.search_purchases(q, SEARCH_LIMIT + 1, item_number=item_number)
+    return {
+        "query": q if q is not None else item_number,
+        "results": results[:SEARCH_LIMIT],
+        "exact_item": item_number is not None,
+        "limit": SEARCH_LIMIT,
+        "truncated": len(results) > SEARCH_LIMIT,
+    }
 
 
 @router.get("/membership-analytics")

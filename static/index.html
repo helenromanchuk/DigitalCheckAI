@@ -114,6 +114,10 @@
           data-i18n-placeholder="search.placeholder" placeholder="Например: avocado, молоко, 1268246..."
           class="border border-slate-300 rounded-lg px-3 py-2 text-sm w-full sm:w-80 focus:outline-none focus:ring-2 focus:ring-blue-500" />
       </div>
+      <div id="exactItemFilter" hidden class="text-sm text-slate-700">
+        <span id="exactItemLabel" class="font-semibold"></span> —
+        <button type="button" onclick="clearItemFilter()" class="text-blue-600 underline" data-i18n="search.clearItem">Сбросить фильтр товара</button>
+      </div>
       <div id="searchSummary" class="text-xs text-slate-500"></div>
       <div class="overflow-x-auto">
         <table class="w-full text-xs">

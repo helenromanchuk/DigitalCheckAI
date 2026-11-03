@@ -1,6 +1,7 @@
 """Tests for Safeway receipt parsing and per-store statistics."""
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.routes import get_db
@@ -159,6 +160,32 @@ def test_search_purchases_across_stores(tmp_path: Path, monkeypatch):
     assert [r["item_number"] for r in rows_ru] == ["555"]
 
     assert client.get("/api/search?q=m").status_code == 422
+    exact = client.get("/api/search", params={"item_number": "555"}).json()
+    assert exact["exact_item"] is True
+    assert [r["item_number"] for r in exact["results"]] == ["555"]
+    assert client.get("/api/search", params={"item_number": "55"}).json()["results"] == []
+    assert client.get("/api/search").status_code == 422
+    assert client.get("/api/search?q=mango&item_number=555").status_code == 422
+    assert client.get("/api/search?item_number=1").status_code == 200
+
+    # Exact-item history is capped like text search, and the DB method needs exactly one filter
+    assert test_db.search_purchases(item_number="555", limit=0) == []
+    with pytest.raises(ValueError):
+        test_db.search_purchases()
+    with pytest.raises(ValueError):
+        test_db.search_purchases("mango", item_number="555")
+    with pytest.raises(ValueError):
+        test_db.search_purchases("   ")
+
+    # Spaces don't count toward the minimum length: a blank query would match every purchase
+    assert client.get("/api/search", params={"q": "   "}).status_code == 422
+    assert client.get("/api/search", params={"q": " m "}).status_code == 422
+
+    # The response says when the results were cut off at the limit
+    assert exact["truncated"] is False and exact["limit"] == 500
+    monkeypatch.setattr("app.api.routes.SEARCH_LIMIT", 0)
+    capped = client.get("/api/search", params={"item_number": "555"}).json()
+    assert (capped["results"], capped["truncated"]) == ([], True)
 
     app.dependency_overrides.clear()
 
