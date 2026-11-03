@@ -184,13 +184,12 @@ function populateCategoryFilterSelect() {
 }
 
 async function refreshAll() {
-  const configLoaded = await loadConfig();
-  // Search works without the config (category labels fall back to their English names)
+  // Search results don't use the config, so the search doesn't wait for it or depend on it loading
   if (currentStore === "search") {
-    await runPurchaseSearch();
+    await Promise.all([loadConfig(), runPurchaseSearch()]);
     return;
   }
-  if (!configLoaded) return;
+  if (!(await loadConfig())) return;
   await Promise.all([loadStats(), loadMembershipAnalytics(), loadItemsTable(), loadReceiptsList()]);
 }
 
@@ -220,6 +219,9 @@ function resetSearchState(exactNumber) {
 }
 
 function schedulePurchaseSearch() {
+  // Typing keeps the shown results until new ones arrive, but an item's history mustn't stay up as if
+  // it matched the typed text
+  if (exactItemNumber !== null) showSearchMessage("search.loading");
   resetSearchState(null);
   purchaseSearchTimer = setTimeout(runPurchaseSearch, 300);
 }
@@ -234,8 +236,9 @@ function showSearchMessage(key) {
 // a number ("ONL-1", "UNKNOWN", a description stub) and are shared by unrelated products
 const REAL_ITEM_NUMBER = /^(SWY-)?\d+$/;
 
-function itemNumberButton(number) {
-  if (!REAL_ITEM_NUMBER.test(number)) return escapeHtml(number);
+// Deposit numbers ("1254" CA REDEMP) aren't linked: their history is only deposits, which aren't purchases
+function itemNumberButton(number, isDeposit = false) {
+  if (isDeposit || !REAL_ITEM_NUMBER.test(number)) return escapeHtml(number);
   return `<button type="button" data-item-number="${escapeHtml(number)}" class="text-blue-600 underline focus:ring-2 rounded">${escapeHtml(number)}</button>`;
 }
 function renderItemFilter() {
@@ -250,9 +253,9 @@ function clearItemFilter() {
 function openItemHistory(number) {
   resetSearchState(number);
   document.getElementById("purchaseSearchInput").value = number;
-  // Earlier results must not show under the new filter while the config and search load
+  // Earlier results must not show under the new filter while it loads
   showSearchMessage("search.loading");
-  // Already on Search: the config is loaded, so only the search is needed
+  // Already on Search: the search doesn't need the config, so there's nothing else to load
   if (currentStore === "search") runPurchaseSearch();
   else setStore("search");
 }
@@ -265,18 +268,22 @@ async function runPurchaseSearch() {
   const itemNumber = exactItemNumber;
   const query = document.getElementById("purchaseSearchInput").value.trim();
   if (itemNumber === null && query.length < 2) { showSearchMessage("search.minChars"); return; }
-  showSearchMessage("search.loading");
+  // The shown results stay until the new ones arrive (the table only says "Loading" when the filter changed)
+  let data;
   try {
     const params = new URLSearchParams(itemNumber === null ? {q: query} : {item_number: itemNumber});
     const res = await fetch(`/api/search?${params}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    if (requestId !== searchRequestId) return;
-    lastSearch = { query, itemNumber, data };
-    renderPurchaseSearch(data, query);
+    data = await res.json();
   } catch (error) {
+    console.error("Purchase search failed:", error);
     if (requestId === searchRequestId) showSearchMessage("search.failed");
+    return;
   }
+  if (requestId !== searchRequestId) return;
+  lastSearch = { query, itemNumber, data };
+  // Outside the try: a rendering bug should surface as itself, not as a failed request
+  renderPurchaseSearch(data, query);
 }
 
 function renderPurchaseSearch(data, query) {
@@ -326,7 +333,7 @@ function renderPurchaseSearch(data, query) {
             ${thumbHtml(r.image_file, "w-10 h-10")}
             <div>
               <div class="font-medium text-slate-900">${escapeHtml(r.clean_name)}</div>
-              <div class="text-[11px] font-mono text-slate-400">${escapeHtml(r.raw_description)} • ${itemNumberButton(r.item_number)}</div>
+              <div class="text-[11px] font-mono text-slate-400">${escapeHtml(r.raw_description)} • ${itemNumberButton(r.item_number, r.is_deposit)}</div>
             </div>
           </div>
         </td>
@@ -686,7 +693,7 @@ function renderItemsTable(data) {
 
     tr.innerHTML = `
       <td class="px-3 py-1.5">${thumbHtml(item.image_file, "w-10 h-10")}</td>
-      <td class="px-3 py-2.5 font-mono font-semibold text-slate-700">${itemNumberButton(item.item_number)}</td>
+      <td class="px-3 py-2.5 font-mono font-semibold text-slate-700">${itemNumberButton(item.item_number, item.is_deposit)}</td>
       <td class="px-3 py-2.5 font-mono text-slate-500 max-w-[14rem] break-words">${escapeHtml(item.raw_description)}</td>
       <td class="px-3 py-2.5 min-w-[18rem]">
         <textarea rows="1"
@@ -794,7 +801,7 @@ function renderReceiptsList(data) {
 
     const itemsRows = (r.items || []).map(item => `
       <tr class="border-t border-slate-100">
-        <td class="py-1.5 px-2 font-mono text-slate-500">${itemNumberButton(item.item_number)}</td>
+        <td class="py-1.5 px-2 font-mono text-slate-500">${itemNumberButton(item.item_number, item.is_deposit)}</td>
         <td class="py-1.5 px-2 font-mono text-slate-600">${escapeHtml(item.raw_description)}</td>
         <td class="py-1.5 px-2 font-medium text-slate-800">
           <div class="flex items-center gap-2">${thumbHtml(item.image_file, "w-8 h-8")}<span>${escapeHtml(item.clean_name)}</span></div>
