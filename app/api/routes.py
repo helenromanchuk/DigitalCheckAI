@@ -320,12 +320,15 @@ def get_receipts(
 
 @router.get("/search")
 def search_purchases(
-    q: str = Query(..., min_length=2),
+    q: str | None = Query(default=None, min_length=2),
+    item_number: str | None = Query(default=None, min_length=1),
     db: Database = Depends(get_db),
 ) -> dict[str, Any]:
     """Searches item purchases across all stores and all time."""
-    results = db.search_purchases(q)
-    return {"query": q, "results": results}
+    if (q is None) == (item_number is None):
+        raise HTTPException(status_code=422, detail="Provide either q or item_number.")
+    results = db.search_purchases(q or "", item_number=item_number)
+    return {"query": q if q is not None else item_number, "results": results, "exact_item": item_number is not None}
 
 
 @router.get("/membership-analytics")

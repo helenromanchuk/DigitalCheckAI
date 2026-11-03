@@ -1105,15 +1105,17 @@ class Database:
             result.append(item)
         return result
 
-    def search_purchases(self, query: str, limit: int = 500) -> list[dict[str, Any]]:
+    def search_purchases(self, query: str = "", limit: int = 500, *, item_number: str | None = None) -> list[dict[str, Any]]:
         """
         Searches item purchases across all stores and all time by item number, receipt
         description, and decoded name. One row per receipt line, newest first.
         """
         q = f"%{query.strip().casefold()}%"
+        predicate = "ri.item_number = ?" if item_number is not None else "casefold(ri.item_number) LIKE ?\n                   OR casefold(\n                        CASE WHEN ri.crv_owner_id IS NULL THEN ri.raw_description\n                             ELSE rtrim(ri.raw_description, '0123456789/ ') END\n                      ) LIKE ?\n                   OR casefold(c.clean_name) LIKE ?"
+        params = (item_number, -1) if item_number is not None else (q, q, q, limit)
         with self.connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT
                     substr(r.transaction_date, 1, 10) AS purchase_date,
                     r.store,
@@ -1139,16 +1141,11 @@ class Database:
                 JOIN item_catalog c ON c.item_number = ri.item_number
                 -- A deposit folded into a bottle is found by its own text ("CA REDEMP", "1254", "CRV"), not by
                 -- the bottle's item number at the end of its description: the bottle's row already shows it
-                WHERE casefold(ri.item_number) LIKE ?
-                   OR casefold(
-                        CASE WHEN ri.crv_owner_id IS NULL THEN ri.raw_description
-                             ELSE rtrim(ri.raw_description, '0123456789/ ') END
-                      ) LIKE ?
-                   OR casefold(c.clean_name) LIKE ?
+                WHERE {predicate}
                 ORDER BY r.transaction_date DESC, ri.id ASC
                 LIMIT ?
                 """,
-                (q, q, q, limit),
+                params,
             ).fetchall()
         return [add_unit_prices(dict(r), "net_amount", "quantity") for r in rows]
 

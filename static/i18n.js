@@ -14,6 +14,9 @@ const I18N = {
     "tabs.all": "Все магазины",
     "tabs.search": "🔍 Поиск",
 
+    "search.clearItem": "Сбросить фильтр товара",
+    "search.loading": "Загрузка покупок…",
+    "search.failed": "Не удалось загрузить покупки. Попробуйте ещё раз.",
     "search.title": "Поиск покупок",
     "search.subtitle": "По всем магазинам и за всё время: название из чека, расшифровка или Item #",
     "search.placeholder": "Например: avocado, молоко, 1268246...",
@@ -232,6 +235,9 @@ const I18N = {
     "tabs.all": "All stores",
     "tabs.search": "🔍 Search",
 
+    "search.clearItem": "Clear item filter",
+    "search.loading": "Loading purchases…",
+    "search.failed": "Could not load purchases. Please try again.",
     "search.title": "Purchase search",
     "search.subtitle": "Across all stores and all time: receipt name, decoded name, or Item #",
     "search.placeholder": "e.g. avocado, milk, 1268246...",

@@ -10,6 +10,8 @@ let lastMembership = null;
 let lastItems = null;
 let lastReceipts = null;
 let lastSearch = null;
+let exactItemNumber = null;
+let searchRequestId = 0;
 
 const STORES = ["costco", "safeway", "all", "search"];
 const STORE_LABELS = { costco: "Costco", safeway: "Safeway" };
@@ -194,8 +196,9 @@ async function refreshAll() {
 function rerenderAll() {
   if (lastConfig) renderConfig(lastConfig);
   if (currentStore === "search") {
+    renderItemFilter();
     const query = document.getElementById("purchaseSearchInput").value.trim();
-    if (lastSearch && lastSearch.query === query) renderPurchaseSearch(lastSearch.data, query);
+    if (lastSearch && lastSearch.query === query && lastSearch.itemNumber === exactItemNumber) renderPurchaseSearch(lastSearch.data, query);
     else runPurchaseSearch();
     return;
   }
@@ -206,26 +209,61 @@ function rerenderAll() {
 }
 
 function schedulePurchaseSearch() {
+  exactItemNumber = null;
+  searchRequestId++;
+  lastSearch = null;
+  renderItemFilter();
   clearTimeout(purchaseSearchTimer);
   purchaseSearchTimer = setTimeout(runPurchaseSearch, 300);
 }
 
+function itemNumberButton(number) {
+  return `<button type="button" data-item-number="${escapeHtml(number)}" class="text-blue-600 underline focus:ring-2 rounded">${escapeHtml(number)}</button>`;
+}
+function renderItemFilter() {
+  const el = document.getElementById("exactItemFilter");
+  el.hidden = exactItemNumber === null;
+  el.textContent = exactItemNumber === null ? "" : `Item #${exactItemNumber} — ${t("search.clearItem")}`;
+}
+function clearItemFilter() {
+  document.getElementById("purchaseSearchInput").value = "";
+  schedulePurchaseSearch();
+}
+function openItemHistory(number) {
+  clearTimeout(purchaseSearchTimer);
+  searchRequestId++;
+  lastSearch = null;
+  exactItemNumber = number;
+  document.getElementById("purchaseSearchInput").value = number;
+  renderItemFilter();
+  setStore("search");
+}
+window.addEventListener("click", event => {
+  const button = event.target.closest?.("button[data-item-number]");
+  if (button) openItemHistory(button.dataset.itemNumber);
+});
 async function runPurchaseSearch() {
+  const requestId = ++searchRequestId;
+  const itemNumber = exactItemNumber;
   const query = document.getElementById("purchaseSearchInput").value.trim();
   const tbody = document.getElementById("searchResultsBody");
   const summary = document.getElementById("searchSummary");
-  if (query.length < 2) {
-    summary.textContent = "";
-    tbody.innerHTML = `<tr><td colspan="8" class="py-8 text-center text-slate-400">${escapeHtml(t("search.minChars"))}</td></tr>`;
-    return;
+  renderItemFilter();
+  summary.textContent = "";
+  const message = key => { tbody.innerHTML = `<tr><td colspan="8" class="py-8 text-center">${escapeHtml(t(key))}</td></tr>`; };
+  if (itemNumber === null && query.length < 2) { message("search.minChars"); return; }
+  message("search.loading");
+  try {
+    const params = new URLSearchParams(itemNumber === null ? {q: query} : {item_number: itemNumber});
+    const res = await fetch(`/api/search?${params}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (requestId !== searchRequestId) return;
+    lastSearch = { query, itemNumber, data };
+    renderPurchaseSearch(data, query);
+  } catch (error) {
+    if (requestId === searchRequestId) message("search.failed");
   }
-
-  const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
-  const data = await res.json();
-  // The user may have changed the search text while the request was in flight
-  if (document.getElementById("purchaseSearchInput").value.trim() !== query) return;
-  lastSearch = { query, data };
-  renderPurchaseSearch(data, query);
 }
 
 function renderPurchaseSearch(data, query) {
@@ -253,7 +291,7 @@ function renderPurchaseSearch(data, query) {
   const stores = [...new Set(rows.map(r => STORE_LABELS[r.store] || r.store))].join(", ");
   summary.textContent = t("search.summary", {
     count: products.length,
-    limited: rows.length >= 500 ? t("search.limited") : "",
+    limited: !data.exact_item && rows.length >= 500 ? t("search.limited") : "",
     stores,
     gross: formatMoney(totalGross),
     net: formatMoney(totalNet)
@@ -275,7 +313,7 @@ function renderPurchaseSearch(data, query) {
             ${thumbHtml(r.image_file, "w-10 h-10")}
             <div>
               <div class="font-medium text-slate-900">${escapeHtml(r.clean_name)}</div>
-              <div class="text-[11px] font-mono text-slate-400">${escapeHtml(r.raw_description)} • ${escapeHtml(r.item_number)}</div>
+              <div class="text-[11px] font-mono text-slate-400">${escapeHtml(r.raw_description)} • ${itemNumberButton(r.item_number)}</div>
             </div>
           </div>
         </td>
@@ -635,7 +673,7 @@ function renderItemsTable(data) {
 
     tr.innerHTML = `
       <td class="px-3 py-1.5">${thumbHtml(item.image_file, "w-10 h-10")}</td>
-      <td class="px-3 py-2.5 font-mono font-semibold text-slate-700">${escapeHtml(item.item_number)}</td>
+      <td class="px-3 py-2.5 font-mono font-semibold text-slate-700">${itemNumberButton(item.item_number)}</td>
       <td class="px-3 py-2.5 font-mono text-slate-500 max-w-[14rem] break-words">${escapeHtml(item.raw_description)}</td>
       <td class="px-3 py-2.5 min-w-[18rem]">
         <textarea rows="1"
@@ -743,7 +781,7 @@ function renderReceiptsList(data) {
 
     const itemsRows = (r.items || []).map(item => `
       <tr class="border-t border-slate-100">
-        <td class="py-1.5 px-2 font-mono text-slate-500">${escapeHtml(item.item_number)}</td>
+        <td class="py-1.5 px-2 font-mono text-slate-500">${itemNumberButton(item.item_number)}</td>
         <td class="py-1.5 px-2 font-mono text-slate-600">${escapeHtml(item.raw_description)}</td>
         <td class="py-1.5 px-2 font-medium text-slate-800">
           <div class="flex items-center gap-2">${thumbHtml(item.image_file, "w-8 h-8")}<span>${escapeHtml(item.clean_name)}</span></div>

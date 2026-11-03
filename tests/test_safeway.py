@@ -159,6 +159,13 @@ def test_search_purchases_across_stores(tmp_path: Path, monkeypatch):
     assert [r["item_number"] for r in rows_ru] == ["555"]
 
     assert client.get("/api/search?q=m").status_code == 422
+    exact = client.get("/api/search", params={"item_number": "555"}).json()
+    assert exact["exact_item"] is True
+    assert [r["item_number"] for r in exact["results"]] == ["555"]
+    assert client.get("/api/search", params={"item_number": "55"}).json()["results"] == []
+    assert client.get("/api/search").status_code == 422
+    assert client.get("/api/search?q=mango&item_number=555").status_code == 422
+    assert client.get("/api/search?item_number=1").status_code == 200
 
     app.dependency_overrides.clear()
 
