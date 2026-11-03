@@ -14,6 +14,7 @@ const I18N = {
     "tabs.all": "Все магазины",
     "tabs.search": "🔍 Поиск",
 
+    "search.itemFilter": "Товар #{number}",
     "search.clearItem": "Сбросить фильтр товара",
     "search.loading": "Загрузка покупок…",
     "search.failed": "Не удалось загрузить покупки. Попробуйте ещё раз.",
@@ -24,7 +25,7 @@ const I18N = {
     "search.notFound": "Ничего не найдено по запросу «{query}».",
     "search.summary": "Найдено покупок: {count}{limited} • Магазины: {stores} • До скидки: {gross} • Со скидкой: {net}",
     "search.crvTotal": "Залог CRV: {amount}",
-    "search.limited": " (показаны первые 500)",
+    "search.limited": " (показаны первые {limit})",
     "search.perUnit": "{amount} за ед.",
 
     "col.date": "Дата",
@@ -235,6 +236,7 @@ const I18N = {
     "tabs.all": "All stores",
     "tabs.search": "🔍 Search",
 
+    "search.itemFilter": "Item #{number}",
     "search.clearItem": "Clear item filter",
     "search.loading": "Loading purchases…",
     "search.failed": "Could not load purchases. Please try again.",
@@ -245,7 +247,7 @@ const I18N = {
     "search.notFound": "Nothing found for “{query}”.",
     "search.summary": "Purchases found: {count}{limited} • Stores: {stores} • Before discounts: {gross} • After discounts: {net}",
     "search.crvTotal": "CRV deposits: {amount}",
-    "search.limited": " (showing the first 500)",
+    "search.limited": " (showing the first {limit})",
     "search.perUnit": "{amount} each",
 
     "col.date": "Date",

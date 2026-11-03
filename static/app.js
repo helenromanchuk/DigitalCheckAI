@@ -184,11 +184,13 @@ function populateCategoryFilterSelect() {
 }
 
 async function refreshAll() {
-  if (!(await loadConfig())) return;
+  const configLoaded = await loadConfig();
+  // Search works without the config (category labels fall back to their English names)
   if (currentStore === "search") {
     await runPurchaseSearch();
     return;
   }
+  if (!configLoaded) return;
   await Promise.all([loadStats(), loadMembershipAnalytics(), loadItemsTable(), loadReceiptsList()]);
 }
 
@@ -208,35 +210,51 @@ function rerenderAll() {
   if (lastReceipts) renderReceiptsList(lastReceipts);
 }
 
-function schedulePurchaseSearch() {
-  exactItemNumber = null;
+// Cancels a pending or in-flight search and switches the filter, before a new search starts
+function resetSearchState(exactNumber) {
+  clearTimeout(purchaseSearchTimer);
   searchRequestId++;
   lastSearch = null;
+  exactItemNumber = exactNumber;
   renderItemFilter();
-  clearTimeout(purchaseSearchTimer);
+}
+
+function schedulePurchaseSearch() {
+  resetSearchState(null);
   purchaseSearchTimer = setTimeout(runPurchaseSearch, 300);
 }
 
+function showSearchMessage(key) {
+  document.getElementById("searchSummary").textContent = "";
+  document.getElementById("searchResultsBody").innerHTML =
+    `<tr><td colspan="8" class="py-8 text-center text-slate-400">${escapeHtml(t(key))}</td></tr>`;
+}
+
+// Costco item numbers and Safeway UPCs ("SWY-…"). Others are made up by the parser for lines without
+// a number ("ONL-1", "UNKNOWN", a description stub) and are shared by unrelated products
+const REAL_ITEM_NUMBER = /^(SWY-)?\d+$/;
+
 function itemNumberButton(number) {
+  if (!REAL_ITEM_NUMBER.test(number)) return escapeHtml(number);
   return `<button type="button" data-item-number="${escapeHtml(number)}" class="text-blue-600 underline focus:ring-2 rounded">${escapeHtml(number)}</button>`;
 }
 function renderItemFilter() {
-  const el = document.getElementById("exactItemFilter");
-  el.hidden = exactItemNumber === null;
-  el.textContent = exactItemNumber === null ? "" : `Item #${exactItemNumber} — ${t("search.clearItem")}`;
+  document.getElementById("exactItemFilter").hidden = exactItemNumber === null;
+  document.getElementById("exactItemLabel").textContent =
+    exactItemNumber === null ? "" : t("search.itemFilter", { number: exactItemNumber });
 }
 function clearItemFilter() {
   document.getElementById("purchaseSearchInput").value = "";
   schedulePurchaseSearch();
 }
 function openItemHistory(number) {
-  clearTimeout(purchaseSearchTimer);
-  searchRequestId++;
-  lastSearch = null;
-  exactItemNumber = number;
+  resetSearchState(number);
   document.getElementById("purchaseSearchInput").value = number;
-  renderItemFilter();
-  setStore("search");
+  // Earlier results must not show under the new filter while the config and search load
+  showSearchMessage("search.loading");
+  // Already on Search: the config is loaded, so only the search is needed
+  if (currentStore === "search") runPurchaseSearch();
+  else setStore("search");
 }
 window.addEventListener("click", event => {
   const button = event.target.closest?.("button[data-item-number]");
@@ -246,13 +264,8 @@ async function runPurchaseSearch() {
   const requestId = ++searchRequestId;
   const itemNumber = exactItemNumber;
   const query = document.getElementById("purchaseSearchInput").value.trim();
-  const tbody = document.getElementById("searchResultsBody");
-  const summary = document.getElementById("searchSummary");
-  renderItemFilter();
-  summary.textContent = "";
-  const message = key => { tbody.innerHTML = `<tr><td colspan="8" class="py-8 text-center">${escapeHtml(t(key))}</td></tr>`; };
-  if (itemNumber === null && query.length < 2) { message("search.minChars"); return; }
-  message("search.loading");
+  if (itemNumber === null && query.length < 2) { showSearchMessage("search.minChars"); return; }
+  showSearchMessage("search.loading");
   try {
     const params = new URLSearchParams(itemNumber === null ? {q: query} : {item_number: itemNumber});
     const res = await fetch(`/api/search?${params}`);
@@ -262,7 +275,7 @@ async function runPurchaseSearch() {
     lastSearch = { query, itemNumber, data };
     renderPurchaseSearch(data, query);
   } catch (error) {
-    if (requestId === searchRequestId) message("search.failed");
+    if (requestId === searchRequestId) showSearchMessage("search.failed");
   }
 }
 
@@ -291,7 +304,7 @@ function renderPurchaseSearch(data, query) {
   const stores = [...new Set(rows.map(r => STORE_LABELS[r.store] || r.store))].join(", ");
   summary.textContent = t("search.summary", {
     count: products.length,
-    limited: !data.exact_item && rows.length >= 500 ? t("search.limited") : "",
+    limited: data.truncated ? t("search.limited", { limit: data.limit }) : "",
     stores,
     gross: formatMoney(totalGross),
     net: formatMoney(totalNet)
